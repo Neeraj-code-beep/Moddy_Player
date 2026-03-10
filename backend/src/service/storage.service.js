@@ -1,4 +1,5 @@
 const ImageKit = require('imagekit');
+const mongoose = require('mongoose');
 
 const imagekit = new ImageKit({
   publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
@@ -11,7 +12,7 @@ function uploadFile(file) {
     imagekit.upload(
       {
         file: file.buffer.toString('base64'), // important
-        fileName: file.originalname,
+        fileName: mongoose.Types.ObjectId().toString(),
         folder: 'songs',
       },
       (error, result) => {
