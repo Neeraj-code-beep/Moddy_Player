@@ -12,7 +12,8 @@ function uploadFile(file) {
     imagekit.upload(
       {
         file: file.buffer.toString('base64'), // important
-        fileName: mongoose.Types.ObjectId().toString(),
+        fileName: new mongoose.Types.ObjectId().toString(),
+        // for file name basically we can use math.random also..
         folder: 'songs',
       },
       (error, result) => {
