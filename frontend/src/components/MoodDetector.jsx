@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import * as faceapi from 'face-api.js';
+import axios from 'axios';
 
-const MoodDetector = () => {
+const MoodDetector = ({ setSongs }) => {
   const videoRef = useRef(null);
   // const canvasRef = useRef(null);
 
@@ -47,6 +48,13 @@ const MoodDetector = () => {
     const dominantMood = Object.keys(expressions).reduce((a, b) =>
       expressions[a] > expressions[b] ? a : b,
     );
+
+    axios
+      .get(`http://localhost:3000/songs?mood=${dominantMood}`)
+      .then((response) => {
+        console.log(response.data);
+        setSongs(response.data.songs);
+      });
     // Object.keys convert object into array...
 
     // setMood(dominantMood);
