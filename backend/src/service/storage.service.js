@@ -11,8 +11,9 @@ function uploadFile(file) {
   return new Promise((resolve, reject) => {
     imagekit.upload(
       {
-        file: file.buffer.toString('base64'), // important
-        fileName: new mongoose.Types.ObjectId().toString(),
+        file: file.buffer.toString('base64'), // important becuse it converts the raw binary data into a 64 base string...
+        // fileName: new mongoose.Types.ObjectId().toString(),
+        fileName: file.originalname,
         // for file name basically we can use math.random also..
         folder: 'songs',
       },
