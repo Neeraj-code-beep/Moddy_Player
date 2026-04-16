@@ -13,10 +13,10 @@ const MoodSongs = ({ Songs }) => {
     }
   };
   return (
-    <div className="mood-songs p-5 w-full pt-0 text-amber-200 font-mono text-lg">
-      <h2 className="mb-4">Recommended Songs</h2>
+    <div className="flex justify-center flex-col items-center mood-songs p-5 w-full pt-0 text-amber-200 font-mono text-lg">
+      <h2 className="mb-4 text-3xl">Recommended Songs</h2>
       {Songs.map((song, index) => (
-        <div className="flex w-full justify-between mx-0 my-1.5" key={index}>
+        <div className="flex w-full justify-center mx-0 my-1.5" key={index}>
           <div className="title">
             <h3>{song.title}</h3>
             <p>{song.artist}</p>

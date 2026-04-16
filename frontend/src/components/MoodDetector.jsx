@@ -80,7 +80,7 @@ const MoodDetector = ({ setSongs }) => {
   }, []);
 
   return (
-    <div className="flex justify-center flex-row gap-5 p-5 items-center">
+    <div className="flex justify-center flex-col gap-5 p-5 items-center">
       <video
         ref={videoRef}
         autoPlay

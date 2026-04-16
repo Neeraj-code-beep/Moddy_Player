@@ -42,5 +42,3 @@ module.exports = uploadFile;
 //     throw error;
 //   }
 // };
-
-module.exports = uploadFile;

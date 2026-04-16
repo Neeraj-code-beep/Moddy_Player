@@ -22,10 +22,10 @@ const App = () => {
   ]);
 
   return (
-    <>
+    <div className="flex justify-center items-center gap-1 flex-col ">
       <MoodDetector setSongs={setSongs} />
       <MoodSongs Songs={Songs} />
-    </>
+    </div>
   );
 };
 
