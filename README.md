@@ -233,6 +233,32 @@ git push origin feature-name
 
 ---
 
+## 💖 Contributors
+
+Thanks to all the amazing people who contribute to **Moddy_Player** 🚀
+
+<p align="center">
+  <a href="https://github.com/Neeraj-code-beep/Moddy_Player/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=Neeraj-code-beep/Moddy_Player" alt="Contributors"/>
+  </a>
+</p>
+
+---
+
+## ⭐ Project Support
+
+<p align="center">
+  <a href="https://github.com/Neeraj-code-beep/Moddy_Player/stargazers">
+    <img src="https://img.shields.io/github/stars/Neeraj-code-beep/Moddy_Player?style=social" alt="Stars">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/Neeraj-code-beep/Moddy_Player/network/members">
+    <img src="https://img.shields.io/github/forks/Neeraj-code-beep/Moddy_Player?style=social" alt="Forks">
+  </a>
+</p>
+
+---
+
 # 👨‍💻 Author
 
 Neeraj Mishra
