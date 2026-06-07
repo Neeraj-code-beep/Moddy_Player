@@ -4,11 +4,7 @@ import songApi from '../api/api';
 
 const MoodDetector = ({ setSongs }) => {
   const videoRef = useRef(null);
-  // const canvasRef = useRef(null);
-
-  // const [mood, setMood] = useState('Detecting...');
-  // const [confidence, setConfidence] = useState(0);
-
+  
   // 1️⃣ Load required models only
   const loadModels = async () => {
     const MODEL_URL = '/models';
@@ -53,26 +49,9 @@ const MoodDetector = ({ setSongs }) => {
       console.log(response.data);
       setSongs(response.data.songs);
     });
-    // Object.keys convert object into array...
-
-    // setMood(dominantMood);
-    // setConfidence(expressions[dominantMood].toFixed(2));
     console.log(dominantMood);
   }
-  // 📌 Canvas drawing
-  // const displaySize = {
-  //   width: videoRef.current.videoWidth,
-  //   height: videoRef.current.videoHeight,
-  // };
-
-  // faceapi.matchDimensions(canvasRef.current, displaySize);
-
-  // const resized = faceapi.resizeResults(detections, displaySize);
-  // const ctx = canvasRef.current.getContext('2d');
-
-  // ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-  // faceapi.draw.drawDetections(canvasRef.current, resized);
-  // faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
+ 
 
   // 4️⃣ Lifecycle
   useEffect(() => {
@@ -93,14 +72,6 @@ const MoodDetector = ({ setSongs }) => {
       >
         Detect face
       </button>
-      {/* <canvas
-          ref={canvasRef}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-          }}
-        /> */}
     </div>
   );
 };
