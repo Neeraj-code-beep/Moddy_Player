@@ -1,1 +1,122 @@
-@import 'tailwindcss';
+/* src/index.css */
+:root {
+  /* The New Neon Color Palette */
+  --bg-dark: #12141D;      /* Deep, inky background */
+  --bg-card: #1A1C29;      /* Slightly lighter card background */
+  --text-main: #FFFFFF;
+  --text-sub: #D946EF;     /* Neon pink/purple for secondary text */
+  --neon-cyan: #06B6D4;
+  --gradient-bg: linear-gradient(135deg, #06B6D4 0%, #3B82F6 50%, #D946EF 100%);
+  --glow-shadow: 0 10px 25px rgba(217, 70, 239, 0.4);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+  min-height: 100vh;
+}
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 380px;
+  gap: 40px;
+}
+
+/* The Main Container */
+.player-card {
+  background-color: var(--bg-card);
+  border-radius: 30px;
+  padding: 30px 24px;
+  width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+  position: relative;
+  overflow: hidden;
+}
+
+/* The glowing cyan line at the top of the cards from your image */
+.player-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--neon-cyan);
+  box-shadow: 0 2px 15px var(--neon-cyan);
+}
+
+/* Framing the Camera Feed */
+.album-art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 20px;
+  object-fit: cover;
+  background-color: #000;
+  /* This creates a gradient border around your camera feed */
+  padding: 3px; 
+  background-image: var(--gradient-bg);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+}
+
+/* Typography matching the image */
+.song-info {
+  text-align: center;
+  margin-top: 25px;
+}
+
+.song-info h2 {
+  margin: 0 0 6px 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.song-info p {
+  margin: 0;
+  color: var(--text-sub); /* The neon purple singer text */
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* The Gradient Glowing Button */
+.action-btn {
+  background: var(--gradient-bg);
+  color: #fff;
+  border: none;
+  /* More squared-off edges like the play button in the image */
+  border-radius: 14px; 
+  padding: 18px 32px;
+  font-size: 1.1rem;
+  font-weight: bold;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 25px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: var(--glow-shadow);
+}
+
+.action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px rgba(217, 70, 239, 0.6); /* Glows brighter on hover */
+}
+
+/* The Playlist Heading */
+.section-title {
+  font-size: 1.1rem;
+  color: var(--text-main);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-align: center;
+  margin-bottom: 20px;
+}

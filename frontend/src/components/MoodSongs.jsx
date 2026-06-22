@@ -1,43 +1,30 @@
-// import { useState } from 'react';
-
-import { useState } from 'react';
-
 const MoodSongs = ({ Songs }) => {
-  const [isPlaying, setIsPlaying] = useState(null);
-
-  const handlePlayPause = (index) => {
-    if (isPlaying === index) {
-      setIsPlaying(null);
-    } else {
-      setIsPlaying(index);
-    }
-  };
   return (
-    <div className="flex justify-center flex-col items-center mood-songs p-5 w-full pt-0 text-amber-200 font-mono text-lg">
-      <h2 className="mb-4 text-3xl">Recommended Songs</h2>
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
       {Songs.map((song, index) => (
-        <div className="flex w-full justify-center mx-0 my-1.5" key={index}>
-          <div className="title">
-            <h3>{song.title}</h3>
-            <p>{song.artist}</p>
+        <div 
+          key={index} 
+          className="bg-[#181818] p-4 rounded-md hover:bg-[#282828] transition-colors duration-300 cursor-pointer group flex flex-col"
+        >
+          {/* Square Album Art Placeholder */}
+          <div className="w-full aspect-square bg-neutral-800 rounded mb-4 shadow-lg relative">
+             {/* If you have images later: <img src={song.cover} className="w-full h-full object-cover rounded" /> */}
+             
+             {/* Green Play Button that appears on hover (Classic Spotify UI) */}
+             <div className="absolute bottom-2 right-2 w-12 h-12 bg-green-500 rounded-full shadow-xl flex items-center justify-center text-black opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 hover:scale-105 hover:bg-green-400">
+               <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 ml-1">
+                 <path d="M8 5v14l11-7z" />
+               </svg>
+             </div>
           </div>
-          <div className="play-pause-button">
-            {isPlaying === index && (
-              <audio
-                src={song.audio}
-                className="hidden"
-                autoPlay={isPlaying === index}
-              ></audio>
-            )}
-            <button onClick={() => handlePlayPause(index)}>
-              {isPlaying === index ? (
-                <i className="ri-pause-line"></i>
-              ) : (
-                <i className="ri-play-circle-fill"></i>
-              )}
-              ;
-            </button>
-          </div>
+          
+          {/* Song Information */}
+          <h3 className="text-white font-bold truncate text-sm mb-1">
+            {song.title || `Track ${index + 1}`}
+          </h3>
+          <p className="text-neutral-400 text-xs truncate font-semibold">
+            {song.artist || "Unknown Artist"}
+          </p>
         </div>
       ))}
     </div>

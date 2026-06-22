@@ -1,106 +1,81 @@
-import React, { useEffect, useRef } from 'react';
-import * as faceapi from 'face-api.js';
-import songApi from '../api/api';
+import React, { useRef, useState, useEffect } from 'react';
+import './MoodPlayer.css'; 
 
-const MoodDetector = ({ setSongs }) => {
+const MoodDetector = () => {
   const videoRef = useRef(null);
-  // const canvasRef = useRef(null);
+  const [isScanning, setIsScanning] = useState(false);
 
-  // const [mood, setMood] = useState('Detecting...');
-  // const [confidence, setConfidence] = useState(0);
-
-  // 1️⃣ Load required models only
-  const loadModels = async () => {
-    const MODEL_URL = '/models';
-
-    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-
-    console.log('Face-API models loaded');
-  };
-
-  // 2️⃣ Start webcam
-  const startVideo = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      videoRef.current.srcObject = stream;
-    } catch (err) {
-      console.error('Camera access denied', err);
-    }
-  };
-
-  // 3️⃣ Detect mood
-  async function detectMood() {
-    const detections = await faceapi
-      .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceExpressions();
-
-    if (!detections || detections.length === 0) {
-      console.log('No face detected');
-      return;
-    }
-
-    // 📌 Extract expressions
-    const expressions = detections[0].expressions;
-
-    const dominantMood = Object.keys(expressions).reduce((a, b) =>
-      expressions[a] > expressions[b] ? a : b,
-    );
-
-    songApi.get(`/?mood=${dominantMood}`).then((response) => {
-      console.log(response.data);
-      setSongs(response.data.songs);
-    });
-    // Object.keys convert object into array...
-
-    // setMood(dominantMood);
-    // setConfidence(expressions[dominantMood].toFixed(2));
-    console.log(dominantMood);
-  }
-  // 📌 Canvas drawing
-  // const displaySize = {
-  //   width: videoRef.current.videoWidth,
-  //   height: videoRef.current.videoHeight,
-  // };
-
-  // faceapi.matchDimensions(canvasRef.current, displaySize);
-
-  // const resized = faceapi.resizeResults(detections, displaySize);
-  // const ctx = canvasRef.current.getContext('2d');
-
-  // ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-  // faceapi.draw.drawDetections(canvasRef.current, resized);
-  // faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
-
-  // 4️⃣ Lifecycle
+  // THIS IS THE NEW CODE: It asks for webcam access and streams it to the video tag
   useEffect(() => {
-    loadModels().then(startVideo);
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Camera access denied or broken:", err);
+      }
+    };
+
+    startCamera();
+
+    // Cleanup: Turn off the camera when you leave the page
+    return () => {
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      }
+    };
   }, []);
 
+  const detectMood = () => {
+    setIsScanning(true);
+    console.log("Webcam captured! Sending to AI...");
+    setTimeout(() => setIsScanning(false), 2500); 
+  };
+
   return (
-    <div className="flex justify-center flex-col gap-5 p-5 items-center">
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        className="w-80 shadow-md rounded-md object-cover aspect-video"
-      />
-      <button
-        onClick={detectMood}
-        className="shadow-md rounded-sm p-2 bg-amber-200 w-32 cursor-pointer"
-      >
-        Detect face
-      </button>
-      {/* <canvas
-          ref={canvasRef}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-          }}
-        /> */}
+    <div className="retro-container">
+      <div className="noise-overlay"></div>
+
+      <header className="retro-header">
+        <h1>MoodTape.</h1>
+        <p>Your emotional frequency, captured on tape.</p>
+      </header>
+
+      <main className="player-grid">
+        <div className="scanner-section">
+          <div className="polaroid-frame">
+            <div className="video-placeholder">
+              {isScanning && <div className="scan-line"></div>}
+              {/* The webcam stream attaches here */}
+              <video ref={videoRef} autoPlay playsInline muted className="webcam-feed" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            </div>
+            <div className="polaroid-caption">
+              <button onClick={detectMood} className="retro-btn" disabled={isScanning}>
+                {isScanning ? 'Processing...' : 'Scan Mood'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="playlist-section">
+          <h2>Current Vibe</h2>
+          <div className="cassette-tape">
+            <div className="tape-wheels">
+              <div className="wheel"></div>
+              <div className="wheel"></div>
+            </div>
+            <div className="tape-label">Golden Hour Mix</div>
+          </div>
+          
+          <ul className="track-list">
+             <li><span>1.</span> Sunset Lover - Petit Biscuit</li>
+             <li><span>2.</span> Dreams - Fleetwood Mac</li>
+             <li><span>3.</span> L$D - A$AP Rocky</li>
+          </ul>
+        </div>
+      </main>
     </div>
   );
 };

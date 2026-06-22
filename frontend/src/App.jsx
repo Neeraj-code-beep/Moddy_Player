@@ -1,32 +1,13 @@
-import { useState } from 'react';
+import React from 'react';
 import MoodDetector from './components/MoodDetector';
-import MoodSongs from './components/MoodSongs';
 
-const App = () => {
-  const [Songs, setSongs] = useState([
-    // {
-    //   title: 'test_title',
-    //   artist: 'test_artist',
-    //   url: 'test_url',
-    // },
-    // {
-    //   title: 'test_title',
-    //   artist: 'test_artist',
-    //   url: 'test_url',
-    // },
-    // {
-    //   title: 'test_title',
-    //   artist: 'test_artist',
-    //   url: 'test_url',
-    // },
-  ]);
-
+function App() {
   return (
-    <div className="flex justify-center items-center gap-1 flex-col ">
-      <MoodDetector setSongs={setSongs} />
-      <MoodSongs Songs={Songs} />
+    // We remove all the old sidebars and wrappers here
+    <div>
+      <MoodDetector />
     </div>
   );
-};
+}
 
 export default App;
