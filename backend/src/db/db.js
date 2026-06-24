@@ -12,3 +12,5 @@ function connectToDB() {
 }
 
 module.exports = connectToDB;
+
+c;

@@ -1,107 +1,213 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as faceapi from 'face-api.js';
 import songApi from '../api/api';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ScanFace, Loader2, Sparkles } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 const MoodDetector = ({ setSongs }) => {
   const videoRef = useRef(null);
-  // const canvasRef = useRef(null);
-
-  // const [mood, setMood] = useState('Detecting...');
-  // const [confidence, setConfidence] = useState(0);
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [detectedMood, setDetectedMood] = useState(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // 1️⃣ Load required models only
   const loadModels = async () => {
-    const MODEL_URL = '/models';
-
-    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-
-    console.log('Face-API models loaded');
+    try {
+      const MODEL_URL = '/models';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+      setIsModelLoaded(true);
+      console.log('Face-API models loaded');
+    } catch (err) {
+      console.error('Failed to load models', err);
+      setErrorMsg('Failed to load face detection models.');
+    }
   };
 
   // 2️⃣ Start webcam
   const startVideo = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
     } catch (err) {
       console.error('Camera access denied', err);
+      setErrorMsg('Camera access denied. Please allow camera permissions.');
     }
   };
 
   // 3️⃣ Detect mood
   async function detectMood() {
-    const detections = await faceapi
-      .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceExpressions();
+    if (!isModelLoaded || !videoRef.current) return;
+    setIsScanning(true);
+    setDetectedMood(null);
+    setErrorMsg('');
 
-    if (!detections || detections.length === 0) {
-      console.log('No face detected');
-      return;
+    try {
+      // Simulate scanning time for premium feel
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      const detections = await faceapi
+        .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceExpressions();
+
+      if (!detections || detections.length === 0) {
+        setErrorMsg('No face detected. Please ensure you are visible.');
+        setIsScanning(false);
+        return;
+      }
+
+      // 📌 Extract expressions
+      const expressions = detections[0].expressions;
+      const dominantMood = Object.keys(expressions).reduce((a, b) =>
+        expressions[a] > expressions[b] ? a : b,
+      );
+
+      setDetectedMood(dominantMood);
+      
+      songApi.get(`/?mood=${dominantMood}`).then((response) => {
+        console.log(response.data);
+        setSongs(response.data.songs);
+        // Scroll to songs section
+        setTimeout(() => {
+          document.getElementById('songs-section')?.scrollIntoView({ behavior: 'smooth' });
+        }, 500);
+      });
+
+      console.log('Detected:', dominantMood);
+    } catch (err) {
+      console.error('Error during detection', err);
+      setErrorMsg('An error occurred during scanning.');
+    } finally {
+      setIsScanning(false);
     }
-
-    // 📌 Extract expressions
-    const expressions = detections[0].expressions;
-
-    const dominantMood = Object.keys(expressions).reduce((a, b) =>
-      expressions[a] > expressions[b] ? a : b,
-    );
-
-    songApi.get(`/?mood=${dominantMood}`).then((response) => {
-      console.log(response.data);
-      setSongs(response.data.songs);
-    });
-    // Object.keys convert object into array...
-
-    // setMood(dominantMood);
-    // setConfidence(expressions[dominantMood].toFixed(2));
-    console.log(dominantMood);
   }
-  // 📌 Canvas drawing
-  // const displaySize = {
-  //   width: videoRef.current.videoWidth,
-  //   height: videoRef.current.videoHeight,
-  // };
-
-  // faceapi.matchDimensions(canvasRef.current, displaySize);
-
-  // const resized = faceapi.resizeResults(detections, displaySize);
-  // const ctx = canvasRef.current.getContext('2d');
-
-  // ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-  // faceapi.draw.drawDetections(canvasRef.current, resized);
-  // faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
 
   // 4️⃣ Lifecycle
   useEffect(() => {
     loadModels().then(startVideo);
+    return () => {
+      // Cleanup video stream on unmount
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      }
+    };
   }, []);
 
   return (
-    <div className="flex justify-center flex-col gap-5 p-5 items-center">
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        className="w-80 shadow-md rounded-md object-cover aspect-video"
-      />
-      <button
-        onClick={detectMood}
-        className="shadow-md rounded-sm p-2 bg-amber-200 w-32 cursor-pointer"
+    <section id="detector-section" className="relative w-full max-w-4xl mx-auto py-24 px-6 flex flex-col items-center">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true }}
+        className="text-center mb-12"
       >
-        Detect face
-      </button>
-      {/* <canvas
-          ref={canvasRef}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-          }}
-        /> */}
-    </div>
+        <h2 className="text-3xl md:text-5xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+          AI Emotion Analysis
+        </h2>
+        <p className="text-gray-400 text-lg">Position your face in the frame and let our neural engine detect your current vibe.</p>
+      </motion.div>
+
+      <div className="relative group">
+        {/* Animated glowing border behind video */}
+        <div className={cn(
+          "absolute -inset-1 bg-gradient-to-r from-primary via-secondary to-accent rounded-2xl blur opacity-30 group-hover:opacity-70 transition duration-1000 group-hover:duration-200",
+          isScanning && "animate-pulse opacity-100 blur-md"
+        )}></div>
+
+        <div className="relative bg-[#0a0a0a] rounded-2xl p-2 border border-white/10 glass-panel overflow-hidden shadow-2xl">
+          <div className="relative rounded-xl overflow-hidden aspect-video w-[320px] md:w-[640px] bg-black/50 flex items-center justify-center">
+            
+            {/* The Video Feed */}
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              className={cn("w-full h-full object-cover transition-all duration-700", isScanning ? "scale-105 brightness-110 saturate-150" : "scale-100")}
+            />
+
+            {/* Scanning Line Overlay */}
+            <AnimatePresence>
+              {isScanning && (
+                <motion.div
+                  initial={{ top: '0%' }}
+                  animate={{ top: '100%' }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                  className="absolute left-0 right-0 h-1 bg-secondary shadow-[0_0_20px_#06b6d4] z-10"
+                />
+              )}
+            </AnimatePresence>
+
+            {/* Corner Markers (Sci-fi feel) */}
+            <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-white/30 rounded-tl-lg pointer-events-none"></div>
+            <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-white/30 rounded-tr-lg pointer-events-none"></div>
+            <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-white/30 rounded-bl-lg pointer-events-none"></div>
+            <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-white/30 rounded-br-lg pointer-events-none"></div>
+
+            {/* Loading state before models are ready */}
+            {!isModelLoaded && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center z-20">
+                <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
+                <span className="text-sm font-mono text-primary animate-pulse tracking-widest">INITIALIZING NEURAL NETS...</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Controls & Feedback */}
+      <div className="mt-10 flex flex-col items-center gap-6">
+        <button
+          onClick={detectMood}
+          disabled={!isModelLoaded || isScanning}
+          className="relative px-8 py-4 rounded-full font-bold text-white transition-all overflow-hidden group disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <div className="absolute inset-0 bg-gradient-to-r from-primary to-accent opacity-80 group-hover:opacity-100 transition-opacity"></div>
+          
+          <span className="relative flex items-center gap-3">
+            {isScanning ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Analyzing Face...
+              </>
+            ) : (
+              <>
+                <ScanFace className="w-5 h-5" />
+                Initialize Scan
+              </>
+            )}
+          </span>
+        </button>
+
+        {errorMsg && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-red-400 text-sm font-medium bg-red-400/10 px-4 py-2 rounded-lg border border-red-400/20">
+            {errorMsg}
+          </motion.div>
+        )}
+
+        <AnimatePresence>
+          {detectedMood && !isScanning && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              className="flex items-center gap-3 glass-panel px-6 py-3 rounded-2xl border border-secondary/30 shadow-[0_0_30px_rgba(6,182,212,0.2)]"
+            >
+              <Sparkles className="w-5 h-5 text-secondary" />
+              <div className="flex flex-col">
+                <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Detected Vibe</span>
+                <span className="text-xl font-bold text-white capitalize">{detectedMood}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </section>
   );
 };
 
