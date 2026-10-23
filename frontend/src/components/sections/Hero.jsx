@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { ArrowDown, Sparkles } from 'lucide-react';
 
 const Hero = () => {
@@ -17,7 +17,7 @@ const Hero = () => {
       </div>
 
       <div className="relative z-10 text-center px-6 max-w-4xl mx-auto flex flex-col items-center">
-        <motion.div
+        <Motion.div
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.8, ease: 'easeOut' }}
@@ -27,11 +27,11 @@ const Hero = () => {
           <span className="text-sm font-medium text-gray-300">
             Next-gen Music Experience
           </span>
-        </motion.div>
+        </Motion.div>
 
         <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-6">
           {headline.split('').map((char, index) => (
-            <motion.span
+            <Motion.span
               key={index}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -45,11 +45,11 @@ const Hero = () => {
               className="inline-block bg-clip-text text-transparent bg-gradient-to-r from-white via-gray-200 to-gray-500"
             >
               {char === ' ' ? '\u00A0' : char}
-            </motion.span>
+            </Motion.span>
           ))}
         </h1>
 
-        <motion.p
+        <Motion.p
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 1.5, duration: 0.8 }}
@@ -57,9 +57,9 @@ const Hero = () => {
         >
           Let our advanced AI analyze your emotions and curate the perfect
           playlist. Music that feels exactly how you do right now.
-        </motion.p>
+        </Motion.p>
 
-        <motion.div
+        <Motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 1.8, duration: 0.8 }}
@@ -79,11 +79,11 @@ const Hero = () => {
               <ArrowDown className="w-5 h-5 group-hover:translate-y-1 transition-transform" />
             </span>
           </button>
-        </motion.div>
+        </Motion.div>
       </div>
 
       {/* Scroll indicator */}
-      <motion.div
+      <Motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 2.5, duration: 1 }}
@@ -93,7 +93,7 @@ const Hero = () => {
           Scroll to discover
         </span>
         <div className="w-[1px] h-12 bg-gradient-to-b from-gray-500 to-transparent"></div>
-      </motion.div>
+      </Motion.div>
     </section>
   );
 };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { Play, Menu, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -19,7 +19,7 @@ const Navbar = () => {
 
   return (
     <>
-      <motion.nav
+      <Motion.nav
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ type: 'spring', stiffness: 100, damping: 20 }}
@@ -61,10 +61,10 @@ const Navbar = () => {
             <Menu className="w-6 h-6" />
           </button>
         </div>
-      </motion.nav>
+      </Motion.nav>
 
       {/* Mobile Menu Drawer */}
-      <motion.div
+      <Motion.div
         className={cn(
           'fixed inset-0 z-[60] glass-panel flex flex-col p-6',
           mobileMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'
@@ -93,7 +93,7 @@ const Navbar = () => {
             Log In
           </button>
         </div>
-      </motion.div>
+      </Motion.div>
     </>
   );
 };

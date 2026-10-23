@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { Play, Pause, Music } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -23,7 +23,7 @@ const MoodSongs = ({ Songs, currentSong, isPlaying, onPlaySong }) => {
 
   return (
     <section id="songs-section" className="w-full max-w-6xl mx-auto py-24 px-6 min-h-screen">
-      <motion.div
+      <Motion.div
         initial={{ opacity: 0, y: 20 }}
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true }}
@@ -33,9 +33,9 @@ const MoodSongs = ({ Songs, currentSong, isPlaying, onPlaySong }) => {
           Recommended Tracks
         </h2>
         <p className="text-gray-400">Curated based on your current vibe</p>
-      </motion.div>
+      </Motion.div>
 
-      <motion.div
+      <Motion.div
         variants={containerVariants}
         initial="hidden"
         whileInView="show"
@@ -46,7 +46,7 @@ const MoodSongs = ({ Songs, currentSong, isPlaying, onPlaySong }) => {
           const isThisSongPlaying = currentSong?.audio === song.audio && isPlaying;
           
           return (
-            <motion.div
+            <Motion.div
               key={index}
               variants={itemVariants}
               whileHover={{ y: -5, scale: 1.02 }}
@@ -62,9 +62,9 @@ const MoodSongs = ({ Songs, currentSong, isPlaying, onPlaySong }) => {
                 <div className="absolute inset-0 flex items-center justify-center">
                   {isThisSongPlaying ? (
                     <div className="flex gap-1 items-end h-6">
-                      <motion.div animate={{ height: [8, 24, 8] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1.5 bg-white rounded-t-sm" />
-                      <motion.div animate={{ height: [16, 8, 16] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1.5 bg-white rounded-t-sm" />
-                      <motion.div animate={{ height: [12, 20, 12] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1.5 bg-white rounded-t-sm" />
+                      <Motion.div animate={{ height: [8, 24, 8] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1.5 bg-white rounded-t-sm" />
+                      <Motion.div animate={{ height: [16, 8, 16] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1.5 bg-white rounded-t-sm" />
+                      <Motion.div animate={{ height: [12, 20, 12] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1.5 bg-white rounded-t-sm" />
                     </div>
                   ) : (
                     <Music className="w-6 h-6 text-white/50 group-hover:text-white transition-colors" />
@@ -101,10 +101,10 @@ const MoodSongs = ({ Songs, currentSong, isPlaying, onPlaySong }) => {
               <div className="w-8 flex justify-end text-gray-500 font-mono text-sm opacity-50 group-hover:opacity-100 transition-opacity">
                 {String(index + 1).padStart(2, '0')}
               </div>
-            </motion.div>
+            </Motion.div>
           );
         })}
-      </motion.div>
+      </Motion.div>
     </section>
   );
 };

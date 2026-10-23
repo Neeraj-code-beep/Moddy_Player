@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Music2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -36,7 +36,7 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) 
   if (!currentSong) return null;
 
   return (
-    <motion.div
+    <Motion.div
       initial={{ y: 100, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
@@ -56,7 +56,7 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) 
 
         {/* Track Info */}
         <div className="flex items-center gap-4 w-full md:w-1/3">
-          <motion.div
+          <Motion.div
             animate={{ rotate: isPlaying ? 360 : 0 }}
             transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
             className={cn(
@@ -66,7 +66,7 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) 
             style={{ animationPlayState: isPlaying ? 'running' : 'paused' }}
           >
             <Music2 className="w-5 h-5 text-white" />
-          </motion.div>
+          </Motion.div>
           <div className="flex flex-col overflow-hidden">
             <span className="text-white font-semibold truncate">{currentSong.title}</span>
             <span className="text-gray-400 text-sm truncate">{currentSong.artist}</span>
@@ -112,7 +112,7 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) 
         </div>
 
       </div>
-    </motion.div>
+    </Motion.div>
   );
 };
 
