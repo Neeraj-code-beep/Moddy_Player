@@ -11,7 +11,6 @@ import BottomPlayer from './components/player/BottomPlayer';
 const App = () => {
   const [songs, setSongs] = useState([]);
   const [currentSong, setCurrentSong] = useState(null);
-  const [currentSongIndex, setCurrentSongIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
   // Initialize smooth scrolling
@@ -40,29 +39,28 @@ const App = () => {
     };
   }, []);
 
-  const handlePlaySong = (song, index) => {
+  const handlePlaySong = (song) => {
     if (currentSong?.audio === song.audio) {
       setIsPlaying(!isPlaying); // Toggle play/pause if same song
     } else {
       setCurrentSong(song);
-      setCurrentSongIndex(index);
       setIsPlaying(true);
     }
   };
 
   const handleNext = () => {
     if (songs.length === 0) return;
-    const nextIndex = (currentSongIndex + 1) % songs.length;
+    const activeIndex = songs.findIndex((song) => song.audio === currentSong?.audio);
+    const nextIndex = ((activeIndex < 0 ? -1 : activeIndex) + 1) % songs.length;
     setCurrentSong(songs[nextIndex]);
-    setCurrentSongIndex(nextIndex);
     setIsPlaying(true);
   };
 
   const handlePrev = () => {
     if (songs.length === 0) return;
-    const prevIndex = currentSongIndex === 0 ? songs.length - 1 : currentSongIndex - 1;
+    const activeIndex = songs.findIndex((song) => song.audio === currentSong?.audio);
+    const prevIndex = activeIndex <= 0 ? songs.length - 1 : activeIndex - 1;
     setCurrentSong(songs[prevIndex]);
-    setCurrentSongIndex(prevIndex);
     setIsPlaying(true);
   };
 

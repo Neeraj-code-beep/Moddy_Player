@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as faceapi from 'face-api.js';
-import songApi from '../api/api';
-import { motion, AnimatePresence } from 'framer-motion';
+import { fetchSongsByMood } from '../api/api';
+import { AnimatePresence } from 'framer-motion';
 import { ScanFace, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const MoodDetector = ({ setSongs }) => {
   const videoRef = useRef(null);
+  const scanSequenceRef = useRef(0);
+  const requestControllerRef = useRef(null);
 
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -50,6 +52,10 @@ const MoodDetector = ({ setSongs }) => {
   const detectMood = async () => {
     if (!isModelLoaded || !videoRef.current) return;
 
+    const scanSequence = ++scanSequenceRef.current;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setIsScanning(true);
     setDetectedMood(null);
     setErrorMsg('');
@@ -63,6 +69,8 @@ const MoodDetector = ({ setSongs }) => {
         .withFaceLandmarks()
         .withFaceExpressions();
 
+      if (scanSequence !== scanSequenceRef.current) return;
+
       if (!detections || detections.length === 0) {
         setErrorMsg('No face detected. Please ensure you are visible.');
         return;
@@ -74,12 +82,11 @@ const MoodDetector = ({ setSongs }) => {
         expressions[a] > expressions[b] ? a : b,
       );
 
+      const songs = await fetchSongsByMood(dominantMood, { signal: controller.signal });
+      if (scanSequence !== scanSequenceRef.current) return;
+
       setDetectedMood(dominantMood);
-
-      const response = await songApi.get(`/?mood=${dominantMood}`);
-
-      console.log(response.data);
-      setSongs(response.data.songs);
+      setSongs(songs);
 
       setTimeout(() => {
         document
@@ -89,20 +96,24 @@ const MoodDetector = ({ setSongs }) => {
 
       console.log('Detected:', dominantMood);
     } catch (err) {
+      if (scanSequence !== scanSequenceRef.current || err.name === 'CanceledError' || err.name === 'AbortError') return;
       console.error('Error during detection', err);
       setErrorMsg('An error occurred during scanning.');
     } finally {
-      setIsScanning(false);
+      if (scanSequence === scanSequenceRef.current) setIsScanning(false);
     }
   };
 
   // Lifecycle
   useEffect(() => {
+    const videoElement = videoRef.current;
     loadModels().then(startVideo);
 
     return () => {
-      if (videoRef.current?.srcObject) {
-        videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      scanSequenceRef.current += 1;
+      requestControllerRef.current?.abort();
+      if (videoElement?.srcObject) {
+        videoElement.srcObject.getTracks().forEach((track) => track.stop());
       }
     };
   }, []);
