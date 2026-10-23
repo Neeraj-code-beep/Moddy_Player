@@ -7,13 +7,13 @@ const imagekit = new ImageKit({
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
 });
 
-function uploadFile(file) {
+function uploadFile(file, fileName = file.originalname) {
   return new Promise((resolve, reject) => {
     imagekit.upload(
       {
         file: file.buffer.toString('base64'), // important becuse it converts the raw binary data into a 64 base string...
         // fileName: new mongoose.Types.ObjectId().toString(),
-        fileName: file.originalname,
+        fileName,
         // for file name basically we can use math.random also..
         folder: 'songs',
       },
@@ -27,6 +27,8 @@ function uploadFile(file) {
     );
   });
 }
+
+uploadFile.deleteFile = (fileId) => imagekit.deleteFile(fileId);
 
 module.exports = uploadFile;
 // const uploadFile = async (file) => {
