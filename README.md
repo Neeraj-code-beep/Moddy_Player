@@ -252,6 +252,69 @@ Errors use a consistent shape, for example `400`, `413`, or `415`:
 { "error": { "code": "INVALID_METADATA", "message": "title is required." } }
 ```
 
+## Mood Recommendations and Listening Feedback
+
+`POST /recommendations` accepts JSON with an optional `mood`, an `intention` (defaults to `match` for compatibility), and an optional `limit` from 1 to 50 (default 12). Supported normalized moods are `angry`, `disgusted`, `fearful`, `happy`, `neutral`, `sad`, and `surprised`. Common legacy spellings such as `fear`, `anger`, and `happiness` are normalized. An unrecognized mood is treated as unspecified and the selected intention still returns a useful catalog ranking.
+
+Available intentions:
+
+- `match` favors an exact mood match, then nearby valence, then other available tracks.
+- `cheer_up` favors more positive mood labels and higher energy; a requested mood provides additional credit to more positive transitions.
+- `calm_down` favors low energy, then medium energy, neutral mood, and calm descriptive tags. High energy is inferred only for ranking when no explicit energy is stored.
+- `surprise` favors tracks outside the requested mood and keeps a familiar mood in the mix when useful.
+
+Ranking is deterministic and uses these weights:
+
+- Mood valence is ordered `sad` (0), `angry`/`disgusted`/`fearful` (1), `neutral` (2), `surprised` (3), and `happy` (4). `match` adds 100 for an exact mood, 25 for a one-step valence neighbor, 5 for an unrecognized catalog mood, or 20 for an open mood choice.
+- `cheer_up` adds 15 times candidate valence, 20 for high or 10 for medium energy, 15 when the candidate is more positive than the requested mood, and 5 for `uplifting` or `energetic` tags.
+- `calm_down` adds 45 for low or 20 for medium energy, 20 for neutral mood, 15 for moving below a high-energy selected mood, and 5 for `calm`, `relaxing`, or `ambient` tags; it subtracts 10 for angry or fearful mood.
+- `surprise` adds 60 for a different recognized mood, 25 when the mood is absent or unrecognized, and 5 for a familiar mood.
+- During selection, each already chosen track from the same artist costs 15 points and each already chosen track from the same genre costs 5 points. Ties use newest creation time and then song ID.
+
+Candidates are fetched by most recent catalog order with a hard cap of 500. Mood-derived energy estimates are temporary ranking hints; the server does not write inferred values to existing records. Stored energy is optional (`low`, `medium`, or `high`); uploads can also provide optional `genre` and up to five comma-separated descriptive `tags`. Existing records need no migration. Recommendations include each existing song object, an explainable `reason`, and the server-generated score.
+
+Example request:
+
+```json
+{ "mood": "sad", "intention": "cheer_up", "limit": 12 }
+```
+
+Example response:
+
+```json
+{
+  "message": "Recommendations generated successfully",
+  "recommendations": [
+    {
+      "song": { "_id": "...", "title": "Example", "artist": "Artist", "mood": "happy", "audio": "https://example.invalid/audio.mp3" },
+      "score": 95,
+      "reason": "has an uplifting mood tag; has a high energy profile; moves toward a more uplifting mood"
+    }
+  ],
+  "requestedMood": "sad",
+  "normalizedMood": "sad",
+  "intention": "cheer_up"
+}
+```
+
+Camera use is opt-in. Users can manually choose one of the supported moods or request an intention with no mood selected. No face image is uploaded or stored.
+
+`POST /feedback` records `{ "sessionId": "<version-4 UUID>", "songId": "<MongoDB song ID>", "event": "like|dislike|skip|completed", "intention": "match|cheer_up|calm_down|surprise" }`. Like and dislike are explicit button actions, skip is recorded when the listener advances tracks, and completed is recorded only when the audio element reaches its end. Feedback is stored separately from songs, checked against an atomic 500-event per-session quota, and expires after 90 days. The quota uses a separate session counter with a unique index and rolling expiry. MongoDB startup creates this quota index before the API accepts traffic. A reserved slot remains consumed if feedback persistence returns an error, since the write outcome can be ambiguous; this can reduce that session's remaining quota until expiry. Callers can create new session UUIDs, so this is not authentication or a complete abuse defense. The session ID is not used to personalize rankings. Events are client-reported signals and are not proof of a real-world preference. This is collection plumbing, not cross-session personalization or a mature feedback model.
+
+## API abuse controls and deployment
+
+The API is public and has no account authentication. Per-IP fixed-window limits are enabled by default: uploads allow 3 requests, feedback 30, recommendations 60, and catalog reads 120 per 60 seconds. Configure `RATE_LIMIT_WINDOW_MS` (1,000–3,600,000 ms) and `RATE_LIMIT_UPLOAD_MAX`, `RATE_LIMIT_FEEDBACK_MAX`, `RATE_LIMIT_RECOMMENDATION_MAX`, and `RATE_LIMIT_CATALOG_MAX` (positive integers) in the backend environment. Blocked requests receive the usual `{ "error": { "code", "message" } }` shape with status 429 and `RateLimit-*` / `Retry-After` headers. The in-memory store is bounded to 20,000 active keys and is suitable only for one Node.js process. When the store fills or fails, limited endpoints fail closed with 503. For multiple instances, supply a shared store implementing `async consume(key, windowMs) -> { count, resetAt }` to `createApp({ rateLimitStore })`, then pass that app to the exported `startServer({ app })`. The shared adapter must atomically increment the same fixed-window key across instances and use a TTL; this repository does not include a Redis adapter or Redis dependency.
+
+By default Express does not trust forwarded IP headers. Set `TRUSTED_PROXY_HOPS` to an integer from 1 to 10 only when the service is reachable exclusively through a known proxy chain that overwrites forwarded headers; set it to the exact number of trusted hops. Keep it at `0` for direct access. Incorrect proxy topology can let callers spoof the IP used by rate limits. These limits and the one-upload-at-a-time process cap reduce accidental or simple repeated abuse; they do not provide identity, bot resistance, or per-user quotas. Public uploads can still incur provider costs, and session UUIDs can be changed to bypass session-based feedback caps. Production deployments should also use edge-level abuse controls and operational quotas appropriate to their hosting provider.
+
+Uploads remain limited to 25 MiB by default (`MAX_UPLOAD_SIZE_BYTES`, range 1 byte–100 MiB), one active upload per app process, one audio file, six metadata fields, bounded field lengths, and the existing MIME/extension/signature checks. The remote upload is stored under a generated UUID filename; the original filename is not used as a remote path. `IMAGEKIT_UPLOAD_RESPONSE_TIMEOUT_MS` defaults to 30,000 ms and accepts 1,000–120,000 ms. It bounds how long the API waits before returning 504; the installed ImageKit SDK does not expose a transport timeout or cancellation option, so it does not cancel the provider request. The upload slot stays occupied until that upload request settles; a late successful asset is deleted best-effort after the upload settles. A provider request that never settles can therefore still occupy the slot indefinitely; do not forcibly release it while the network request might remain active. Configure outbound network timeouts at the hosting layer and monitor long-running uploads. A failure to save the song triggers best-effort provider cleanup, but cleanup failures may leave an orphaned remote file.
+
+`GET /live` reports process liveness without consulting MongoDB; `GET /health` remains readiness and returns 503 when MongoDB is not ready. The backend sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `X-Permitted-Cross-Domain-Policies`. CORS only echoes origins in the configured allowlist; set `CORS_ALLOWED_ORIGINS` to comma-separated production frontend origins (scheme and host included), and do not rely on CORS as protection for non-browser clients. Song schemas declare catalog indexes; feedback schemas declare session/song indexes and a 90-day TTL index. Startup explicitly creates the feedback-quota unique session index and rolling TTL index before listening, so the MongoDB runtime role must have permission to create those indexes. Allow for TTL deletion to run asynchronously.
+
+The default test suite uses mocked database and storage behavior. Set `MONGODB_INTEGRATION_URL` only to a dedicated disposable non-production MongoDB URI targeting `moddy_player_integration_test` to enable `backend/test/mongodb.integration.test.js`; a strict guard rejects any other database, and cleanup drops only this exact database. Its upload provider is mocked, so it does not verify ImageKit. No shared Redis-compatible adapter is included; the injected-store test uses a deterministic local fake and does not verify an actual distributed store. Production proxy topology and live ImageKit behavior require separate deployment-level verification.
+
+Environment defaults and ranges are listed in [`backend/.env.example`](backend/.env.example). Start the local backend with `npm start` from `backend/` after setting valid MongoDB and ImageKit credentials in an ignored local `.env` file. Set `CORS_ALLOWED_ORIGINS` to the frontend's exact deployed origin(s) in production.
+
 Run backend unit/API tests from `backend/` with `npm test`, and frontend pagination tests from `frontend/` with `npm test`. Backend tests use mocked storage and database behavior; they do not require MongoDB or ImageKit credentials. A real backend startup and upload still require a reachable MongoDB database and valid ImageKit configuration.
 
 ---
