@@ -1,8 +1,10 @@
 import { motion as Motion } from 'framer-motion';
-import { Play, Pause, Music2, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Play, Pause, Music2, ThumbsUp, ThumbsDown, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-const MoodSongs = ({ recommendations = [], currentSong, isPlaying, onPlaySong, onFeedback, feedbackMessage }) => (
+const EMPTY_PENDING_FEEDBACK = new Set();
+
+const MoodSongs = ({ recommendations = [], currentSong, isPlaying, onPlaySong, onFeedback, feedbackMessage, pendingFeedback = EMPTY_PENDING_FEEDBACK }) => (
   <section id="songs-section" aria-labelledby="recommendations-title" className="mx-auto min-h-[50vh] w-full max-w-6xl scroll-mt-24 px-5 py-16 sm:px-8 md:py-24">
     <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mb-8 sm:mb-10">
       <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100/75">Made for this moment</p>
@@ -22,11 +24,13 @@ const MoodSongs = ({ recommendations = [], currentSong, isPlaying, onPlaySong, o
         {recommendations.map((recommendation, index) => {
           const song = recommendation.song;
           const isThisSongPlaying = currentSong?.audio === song.audio && isPlaying;
+          const likePending = pendingFeedback.has(`${song._id}:like`);
+          const dislikePending = pendingFeedback.has(`${song._id}:dislike`);
           return (
             <Motion.article key={song._id || song.audio || index} whileHover={{ y: -2 }} className={cn('rounded-2xl border bg-[#1a1a18] p-4 transition-colors sm:p-5', isThisSongPlaying ? 'border-amber-100/40' : 'border-white/[0.08] hover:border-white/15')}>
               <button type="button" onClick={() => onPlaySong(song)} disabled={!song.audio} aria-label={`${isThisSongPlaying ? 'Pause' : 'Play'} ${song.title || 'track'}${song.artist ? ` by ${song.artist}` : ''}`} className="group flex min-h-16 w-full items-center gap-4 text-left disabled:cursor-not-allowed disabled:opacity-55">
                 <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-100/20 to-amber-900/20 text-amber-50">
-                  {isThisSongPlaying ? <Pause aria-hidden="true" className="h-5 w-5" /> : song.audio ? <Play aria-hidden="true" className="ml-0.5 h-5 w-5" /> : <Music aria-hidden="true" className="h-5 w-5" />}
+                  {isThisSongPlaying ? <Pause aria-hidden="true" className="h-5 w-5" /> : song.audio ? <Play aria-hidden="true" className="ml-0.5 h-5 w-5" /> : <Music2 aria-hidden="true" className="h-5 w-5" />}
                 </span>
                 <span className="min-w-0 flex flex-col">
                   <span className="truncate font-semibold text-white">{song.title || 'Untitled track'}</span>
@@ -39,11 +43,11 @@ const MoodSongs = ({ recommendations = [], currentSong, isPlaying, onPlaySong, o
               </div>
               <p className="mt-3 min-h-10 text-sm leading-5 text-white/65">{recommendation.reason}</p>
               <div className="mt-3 flex gap-2 border-t border-white/[0.08] pt-3">
-                <button type="button" onClick={() => onFeedback(song, 'like')} aria-label={`Like ${song.title || 'track'}`} className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm text-white/60 transition hover:bg-white/[0.06] hover:text-amber-100">
-                  <ThumbsUp aria-hidden="true" className="h-4 w-4" /> Like
+                <button type="button" onClick={() => onFeedback(song, 'like')} disabled={likePending} aria-label={`${likePending ? 'Saving like for' : 'Like'} ${song.title || 'track'}`} className="inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm text-white/60 transition hover:bg-white/[0.06] hover:text-amber-100 disabled:cursor-wait disabled:opacity-60">
+                  {likePending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <ThumbsUp aria-hidden="true" className="h-4 w-4" />}{likePending ? 'Saving…' : 'Like'}
                 </button>
-                <button type="button" onClick={() => onFeedback(song, 'dislike')} aria-label={`Dislike ${song.title || 'track'}`} className="inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm text-white/60 transition hover:bg-white/[0.06] hover:text-white">
-                  <ThumbsDown aria-hidden="true" className="h-4 w-4" /> Dislike
+                <button type="button" onClick={() => onFeedback(song, 'dislike')} disabled={dislikePending} aria-label={`${dislikePending ? 'Saving dislike for' : 'Dislike'} ${song.title || 'track'}`} className="inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm text-white/60 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-wait disabled:opacity-60">
+                  {dislikePending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <ThumbsDown aria-hidden="true" className="h-4 w-4" />}{dislikePending ? 'Saving…' : 'Dislike'}
                 </button>
               </div>
             </Motion.article>

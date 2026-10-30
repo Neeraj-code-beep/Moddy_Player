@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion as Motion } from 'framer-motion';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Music2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Music2, Loader2 } from 'lucide-react';
 import { formatPlaybackTime } from '../../lib/format-playback-time';
 
-const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, onEnded }) => {
+const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, onEnded, pendingSkipCount = 0 }) => {
   const audioRef = useRef(null);
   const playbackAttemptRef = useRef(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -11,6 +11,7 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, on
   const [volume, setVolume] = useState(0.7);
   const [playbackError, setPlaybackError] = useState('');
   const canSeek = Number.isFinite(duration) && duration > 0;
+  const isCurrentAudioEvent = (event) => event.currentTarget === audioRef.current;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -48,7 +49,8 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, on
     setIsPlaying((playing) => !playing);
   };
 
-  const handleError = () => {
+  const handleError = (event) => {
+    if (!isCurrentAudioEvent(event)) return;
     setPlaybackError('This track could not be loaded. Try another recommendation.');
     setIsPlaying(false);
   };
@@ -67,10 +69,10 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, on
         ref={audioRef}
         src={currentSong.audio}
         preload="metadata"
-        onLoadStart={() => { setCurrentTime(0); setDuration(0); setPlaybackError(''); }}
-        onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onLoadStart={(event) => { if (isCurrentAudioEvent(event)) { setCurrentTime(0); setDuration(0); setPlaybackError(''); } }}
+        onLoadedMetadata={(event) => { if (isCurrentAudioEvent(event)) setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); }}
+        onDurationChange={(event) => { if (isCurrentAudioEvent(event)) setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); }}
+        onTimeUpdate={(event) => { if (isCurrentAudioEvent(event)) setCurrentTime(event.currentTarget.currentTime); }}
         onEnded={onEnded}
         onError={handleError}
         className="sr-only"
@@ -88,13 +90,15 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, on
 
         <div className="col-span-2 flex min-w-0 flex-col items-center gap-2 md:col-span-1">
           <div className="flex items-center gap-5">
-            <button type="button" onClick={onPrev} aria-label="Play previous track" className="player-icon-button">
+            <button type="button" onClick={onPrev} aria-label={pendingSkipCount ? 'Play previous track; saving skip feedback' : 'Play previous track'} aria-busy={pendingSkipCount > 0} className="player-icon-button">
+              {pendingSkipCount > 0 && <Loader2 aria-hidden="true" className="absolute h-2.5 w-2.5 -translate-y-3 translate-x-3 animate-spin" />}
               <SkipBack aria-hidden="true" className="h-4 w-4" />
             </button>
             <button type="button" onClick={handlePlay} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 text-[#171715] transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-100">
               {isPlaying ? <Pause aria-hidden="true" className="h-4 w-4 fill-current" /> : <Play aria-hidden="true" className="ml-0.5 h-4 w-4 fill-current" />}
             </button>
-            <button type="button" onClick={onNext} aria-label="Play next track" className="player-icon-button">
+            <button type="button" onClick={onNext} aria-label={pendingSkipCount ? 'Play next track; saving skip feedback' : 'Play next track'} aria-busy={pendingSkipCount > 0} className="player-icon-button">
+              {pendingSkipCount > 0 && <Loader2 aria-hidden="true" className="absolute h-2.5 w-2.5 -translate-y-3 translate-x-3 animate-spin" />}
               <SkipForward aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>

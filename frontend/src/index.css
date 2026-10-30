@@ -36,6 +36,7 @@ button, a, input, select { -webkit-tap-highlight-color: transparent; }
 }
 
 .player-icon-button {
+  position: relative;
   display: inline-flex;
   min-width: 40px;
   min-height: 40px;
