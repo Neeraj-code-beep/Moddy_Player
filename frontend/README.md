@@ -19,7 +19,7 @@ Run `npm install` once, then use `npm run dev` from this directory. The app expe
 
 ## Checks
 
-- `npm test` runs the frontend contract and helper tests.
+- `npm test` runs the frontend contract, playback-navigation, playback-time, and camera-model-cleanup tests.
 - `npm run lint` runs ESLint.
 - `npm run build` creates the production bundle in `dist/`.
 
@@ -36,4 +36,4 @@ Run `npm install` once, then use `npm run dev` from this directory. The app expe
 - Login, library, playlists, and persistent user history are not implemented; the interface should not advertise these as available destinations.
 - Playback requires valid audio URLs in the existing catalog. There is no waveform, queue editing, or server-side playback state.
 - Camera results are a best-effort expression estimate, not a definitive reading of a listener's emotional state.
-- Framer Motion is part of the initial bundle. The face-api.js detector is loaded only when the user enables camera detection; its production chunk is still sizable. Camera model files are served from `public/models/` and should be kept local to the app origin.
+- The production build currently emits an approximately 418 kB initial JavaScript chunk and a 665 kB camera chunk (164.5 kB gzip). The camera chunk is dominated by `face-api.js` 0.22.2 and its TensorFlow.js Core 1.7.0 dependency. The current high-level `detectAllFaces(...).withFaceLandmarks().withFaceExpressions()` flow uses face-api's shared `nets` registry, which references additional model families beyond the three loaded by Moddy. A smaller custom inference and alignment pipeline would risk changing detection behavior; the chunk is deferred until camera opt-in, and that rewrite is deferred until it can be verified in a browser. No artificial chunk splitting is used. Camera model files are served from `public/models/` and remain local to the app origin.
