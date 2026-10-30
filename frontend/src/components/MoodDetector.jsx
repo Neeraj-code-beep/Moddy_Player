@@ -3,11 +3,15 @@ import { motion as Motion } from 'framer-motion';
 import { Camera, Loader2, ScanFace, Sparkles } from 'lucide-react';
 import { LISTENING_INTENTIONS, MOOD_OPTIONS } from '../api/recommendation-contract';
 import { cn } from '../lib/utils';
+import { disposeCameraModels } from '../lib/camera-model-cleanup';
 
 const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) => {
   const videoRef = useRef(null);
   const scanSequenceRef = useRef(0);
   const cameraSequenceRef = useRef(0);
+  const cameraLoadsInProgressRef = useRef(new Set());
+  const scanInProgressRef = useRef(false);
+  const disposeAfterScanRef = useRef(false);
   const streamRef = useRef(null);
   const faceApiRef = useRef(null);
   const requestControllerRef = useRef(null);
@@ -15,6 +19,7 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [isCameraEnabled, setIsCameraEnabled] = useState(false);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
+  const [isCameraCleanupPending, setIsCameraCleanupPending] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [selectedMood, setSelectedMood] = useState('');
   const [detectedMood, setDetectedMood] = useState('');
@@ -23,12 +28,15 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
 
   useEffect(() => {
     isMountedRef.current = true;
+    const cameraLoadsInProgress = cameraLoadsInProgressRef.current;
     return () => {
       isMountedRef.current = false;
       scanSequenceRef.current += 1;
       cameraSequenceRef.current += 1;
       requestControllerRef.current?.abort();
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (scanInProgressRef.current) disposeAfterScanRef.current = true;
+      else if (cameraLoadsInProgress.size === 0) disposeCameraModels(faceApiRef.current);
     };
   }, []);
 
@@ -38,8 +46,10 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
 
   const enableCamera = async () => {
     const cameraSequence = ++cameraSequenceRef.current;
+    cameraLoadsInProgressRef.current.add(cameraSequence);
     setErrorMsg('');
     setIsCameraLoading(true);
+    let faceapi;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (!isMountedRef.current || cameraSequence !== cameraSequenceRef.current) {
@@ -47,26 +57,43 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
         return;
       }
       streamRef.current = stream;
-      const faceapi = await import('face-api.js');
+      faceapi = await import('face-api.js');
       if (!isMountedRef.current || cameraSequence !== cameraSequenceRef.current) {
         stream.getTracks().forEach((track) => track.stop());
+        disposeCameraModels(faceapi);
         return;
       }
       faceApiRef.current = faceapi;
       await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-      if (cameraSequence !== cameraSequenceRef.current) return;
+      if (cameraSequence !== cameraSequenceRef.current) {
+        disposeCameraModels(faceapi);
+        return;
+      }
       await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-      if (cameraSequence !== cameraSequenceRef.current) return;
+      if (cameraSequence !== cameraSequenceRef.current) {
+        disposeCameraModels(faceapi);
+        return;
+      }
       await faceapi.nets.faceExpressionNet.loadFromUri('/models');
-      if (!isMountedRef.current || cameraSequence !== cameraSequenceRef.current) return;
+      if (!isMountedRef.current || cameraSequence !== cameraSequenceRef.current) {
+        disposeCameraModels(faceapi);
+        return;
+      }
       setIsModelLoaded(true);
       setIsCameraEnabled(true);
     } catch {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      disposeCameraModels(faceapi || faceApiRef.current);
+      faceApiRef.current = null;
       if (isMountedRef.current && cameraSequence === cameraSequenceRef.current) setErrorMsg('Camera or face detection models are unavailable. You can still choose a mood manually.');
     } finally {
-      if (isMountedRef.current && cameraSequence === cameraSequenceRef.current) setIsCameraLoading(false);
+      cameraLoadsInProgressRef.current.delete(cameraSequence);
+      if (isMountedRef.current) {
+        if (cameraLoadsInProgressRef.current.size === 0) setIsCameraCleanupPending(false);
+        if (cameraSequence === cameraSequenceRef.current) setIsCameraLoading(false);
+      }
     }
   };
 
@@ -75,11 +102,15 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
     scanSequenceRef.current += 1;
     setIsScanning(false);
     setIsCameraLoading(false);
+    setIsCameraCleanupPending(cameraLoadsInProgressRef.current.size > 0 || scanInProgressRef.current);
     requestControllerRef.current?.abort();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
     setIsCameraEnabled(false);
     setIsModelLoaded(false);
+    if (scanInProgressRef.current) disposeAfterScanRef.current = true;
+    else if (cameraLoadsInProgressRef.current.size === 0) disposeCameraModels(faceApiRef.current);
     faceApiRef.current = null;
   };
 
@@ -100,12 +131,14 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
   const detectMood = async () => {
     if (!isModelLoaded || !videoRef.current || !faceApiRef.current) return;
     const scanSequence = ++scanSequenceRef.current;
+    const faceapi = faceApiRef.current;
+    scanInProgressRef.current = true;
     setIsScanning(true);
     setErrorMsg('');
     try {
-      const detections = await faceApiRef.current.detectAllFaces(
+      const detections = await faceapi.detectAllFaces(
         videoRef.current,
-        new faceApiRef.current.TinyFaceDetectorOptions(),
+        new faceapi.TinyFaceDetectorOptions(),
       ).withFaceLandmarks().withFaceExpressions();
       if (scanSequence !== scanSequenceRef.current) return;
       if (!detections.length) {
@@ -121,6 +154,12 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
     } catch {
       if (scanSequence === scanSequenceRef.current) setErrorMsg('Mood detection failed. You can choose a mood manually.');
     } finally {
+      scanInProgressRef.current = false;
+      if (disposeAfterScanRef.current) {
+        disposeCameraModels(faceapi);
+        disposeAfterScanRef.current = false;
+        if (isMountedRef.current && cameraLoadsInProgressRef.current.size === 0) setIsCameraCleanupPending(false);
+      }
       if (scanSequence === scanSequenceRef.current) setIsScanning(false);
     }
   };
@@ -157,11 +196,11 @@ const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) =>
           {isLoading ? <span className="flex items-center gap-2"><Loader2 className="w-5 h-5 animate-spin" />Finding tracks…</span> : 'Get recommendations'}
         </button>
         {!isCameraEnabled && (
-          <button type="button" onClick={enableCamera} disabled={isCameraLoading} className="min-h-12 rounded-full border border-white/20 px-6 py-3 text-white/80 transition hover:bg-white/[0.06] disabled:opacity-50">
-            <span className="flex items-center gap-2">{isCameraLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}{isCameraLoading ? 'Preparing camera…' : 'Enable camera detection'}</span>
+          <button type="button" onClick={enableCamera} disabled={isCameraLoading || isCameraCleanupPending} className="min-h-12 rounded-full border border-white/20 px-6 py-3 text-white/80 transition hover:bg-white/[0.06] disabled:opacity-50">
+            <span className="flex items-center gap-2">{isCameraLoading || isCameraCleanupPending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}{isCameraCleanupPending ? 'Releasing camera resources…' : isCameraLoading ? 'Preparing camera…' : 'Enable camera detection'}</span>
           </button>
         )}
-        {isCameraLoading && (
+        {isCameraLoading && !isCameraCleanupPending && (
           <button type="button" onClick={disableCamera} className="min-h-12 rounded-full px-5 py-3 text-sm text-white/60 transition hover:bg-white/[0.06] hover:text-white">
             Cancel camera setup
           </button>
