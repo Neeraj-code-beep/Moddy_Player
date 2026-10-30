@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const feedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
 
 function getConnectionTimeoutMs(value = process.env.MONGODB_CONNECT_TIMEOUT_MS) {
   if (value === undefined || value === '') return 10_000;
@@ -20,9 +21,12 @@ async function connectToDB() {
     await mongoose.connect(mongoUrl, {
       serverSelectionTimeoutMS: getConnectionTimeoutMs(),
     });
+    // The unique session index makes the feedback quota atomic across requests
+    // and instances. Do not start serving writes if MongoDB cannot create it.
+    await feedbackSessionQuotaModel.createIndexes();
     console.log('Connected to MongoDB');
   } catch (error) {
-    console.error('MongoDB connection failed', { errorName: error?.name || 'Error' });
+    console.error('MongoDB startup preparation failed', { errorName: error?.name || 'Error' });
     throw error;
   }
 }

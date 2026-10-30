@@ -3,9 +3,18 @@ const { after, before, test } = require('node:test');
 const createApp = require('../src/app').createApp;
 const getCorsOrigins = require('../src/app').getCorsOrigins;
 const getUploadLimitBytes = require('../src/routes/song.routes').getUploadLimitBytes;
+const getImageKitResponseTimeoutMs = require('../src/routes/song.routes').getImageKitResponseTimeoutMs;
 
 const validAudio = Buffer.from('RIFF0000WAVE');
 const audioFields = { title: '  Test Song  ', artist: '  Test Artist ', mood: ' happy ' };
+const highTestRateLimits = {
+  windowMs: 60_000,
+  upload: 100,
+  feedback: 100,
+  recommendation: 100,
+  catalog: 100,
+  trustedProxyHops: 0,
+};
 
 function createSongModel({ records = [], createError, findError, countError } = {}) {
   const calls = { filters: [], created: [] };
@@ -82,6 +91,7 @@ before(async () => {
     },
     deleteFile: async (fileId) => deleteCalls.push(fileId),
     isDatabaseReady: () => true,
+    rateLimitConfig: highTestRateLimits,
   });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
@@ -109,8 +119,15 @@ test('upload size configuration defaults to 25 MiB and rejects unreasonable valu
   assert.throws(() => getUploadLimitBytes('104857601'), /between 1 byte and 100 MiB/);
 });
 
+test('ImageKit response wait configuration is bounded and defaults to 30 seconds', () => {
+  assert.equal(getImageKitResponseTimeoutMs(''), 30_000);
+  assert.equal(getImageKitResponseTimeoutMs('5000'), 5_000);
+  assert.throws(() => getImageKitResponseTimeoutMs('999'), /between 1000 and 120000/);
+  assert.throws(() => getImageKitResponseTimeoutMs('120001'), /between 1000 and 120000/);
+});
+
 test('readiness reports unavailable database state as not ready', async () => {
-  const notReadyApp = createApp({ isDatabaseReady: () => false });
+  const notReadyApp = createApp({ isDatabaseReady: () => false, rateLimitConfig: highTestRateLimits });
   const notReadyServer = notReadyApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => notReadyServer.once('listening', resolve));
   try {
@@ -132,6 +149,7 @@ test('CORS allows the configured frontend and omits access for other browser ori
   const corsApp = createApp({
     corsOrigins: new Set(['http://localhost:5173']),
     isDatabaseReady: () => true,
+    rateLimitConfig: highTestRateLimits,
   });
   const corsServer = corsApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => corsServer.once('listening', resolve));
@@ -156,7 +174,23 @@ test('upload trims required metadata and uses a unique provider filename', async
   assert.equal(body.song.artist, 'Test Artist');
   assert.equal(body.song.mood, 'happy');
   assert.match(uploadCalls.at(-1).fileName, /^[0-9a-f-]{36}\.wav$/i);
+  assert.equal(model.calls.created.at(-1).storageFileId, 'provider-file-1');
   assert.equal(body.song.fileId, undefined);
+  assert.equal(body.song.storageFileId, undefined);
+});
+
+test('upload accepts optional structured song metadata without changing legacy upload fields', async () => {
+  const response = await sendUpload(baseUrl, {
+    ...audioFields,
+    genre: ' Ambient ',
+    energy: ' LOW ',
+    tags: 'Calm, relaxing',
+  });
+  const body = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal(body.song.genre, 'ambient');
+  assert.equal(body.song.energy, 'low');
+  assert.deepEqual(body.song.tags, ['calm', 'relaxing']);
 });
 
 test('upload rejects whitespace-only metadata before provider upload', async () => {
@@ -183,6 +217,7 @@ test('upload rejects a missing audio file', async () => {
 });
 
 test('upload rejects unsupported MIME types and mismatched signatures', async () => {
+  const callsBefore = uploadCalls.length;
   const wrongMime = await sendUpload(baseUrl, audioFields, { name: 'track.wav', type: 'text/plain', data: validAudio });
   assert.equal(wrongMime.status, 415);
   assert.equal((await wrongMime.json()).error.code, 'UNSUPPORTED_AUDIO_TYPE');
@@ -190,6 +225,7 @@ test('upload rejects unsupported MIME types and mismatched signatures', async ()
   const wrongSignature = await sendUpload(baseUrl, audioFields, { name: 'track.wav', type: 'audio/wav', data: Buffer.from('not audio') });
   assert.equal(wrongSignature.status, 415);
   assert.equal((await wrongSignature.json()).error.code, 'INVALID_AUDIO_FILE');
+  assert.equal(uploadCalls.length, callsBefore);
 });
 
 test('upload rejects an unexpected file field', async () => {
@@ -215,10 +251,12 @@ test('malformed multipart requests return a controlled client error', async () =
 });
 
 test('upload enforces the configured size limit', async () => {
+  const callsBefore = uploadCalls.length;
   const oversized = Buffer.concat([validAudio, Buffer.alloc(1024)]);
   const response = await sendUpload(baseUrl, audioFields, { name: 'track.wav', type: 'audio/wav', data: oversized });
   assert.equal(response.status, 413);
   assert.equal((await response.json()).error.code, 'UPLOAD_TOO_LARGE');
+  assert.equal(uploadCalls.length, callsBefore);
 });
 
 test('upload concurrency cap rejects a second in-progress upload before provider submission', async () => {
@@ -230,6 +268,7 @@ test('upload concurrency cap rejects a second in-progress upload before provider
   const limitedApp = createApp({
     songModel: model,
     uploadLimitBytes: 1024,
+    rateLimitConfig: highTestRateLimits,
     uploadFile: async () => {
       providerCalls += 1;
       notifyProviderStarted();
@@ -268,6 +307,7 @@ test('provider failures return a safe error response', async () => {
     deleteFile: async () => {},
     uploadLimitBytes: 1024,
     isDatabaseReady: () => true,
+    rateLimitConfig: highTestRateLimits,
   });
   const failingServer = failingApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => failingServer.once('listening', resolve));
@@ -290,6 +330,7 @@ test('database create failure attempts to delete the uploaded provider asset', a
     deleteFile: async (fileId) => deleteCalls.push(fileId),
     uploadLimitBytes: 1024,
     isDatabaseReady: () => true,
+    rateLimitConfig: highTestRateLimits,
   });
   const failingServer = failingApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => failingServer.once('listening', resolve));
@@ -302,6 +343,125 @@ test('database create failure attempts to delete the uploaded provider asset', a
   } finally {
     failingServer.closeAllConnections();
     await new Promise((resolve) => failingServer.close(resolve));
+  }
+});
+
+test('upload concurrency slot is released after parse, validation, provider, database, and cleanup failures', async () => {
+  let providerShouldFail = true;
+  let databaseShouldFail = true;
+  const failurePathModel = {
+    ...model,
+    async create(data) {
+      if (databaseShouldFail) throw new Error('private database detail');
+      return { _id: 'recovered-song', ...data };
+    },
+  };
+  const failurePathApp = createApp({
+    songModel: failurePathModel,
+    uploadLimitBytes: 1024,
+    rateLimitConfig: highTestRateLimits,
+    uploadFile: async () => {
+      if (providerShouldFail) {
+        providerShouldFail = false;
+        throw new Error('private provider detail');
+      }
+      return { fileId: 'cleanup-fails', url: 'https://ik.example.invalid/audio' };
+    },
+    deleteFile: async () => { throw new Error('private cleanup detail'); },
+    isDatabaseReady: () => true,
+  });
+  const failurePathServer = failurePathApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => failurePathServer.once('listening', resolve));
+  const failurePathUrl = `http://127.0.0.1:${failurePathServer.address().port}`;
+  try {
+    const malformed = await fetch(`${failurePathUrl}/songs`, {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=unfinished' },
+      body: '--unfinished\r\nContent-Disposition: form-data; name="title"\r\n',
+    });
+    assert.equal(malformed.status, 400);
+
+    const invalidMetadata = await sendUpload(failurePathUrl, { ...audioFields, title: '' });
+    assert.equal(invalidMetadata.status, 400);
+    assert.equal((await invalidMetadata.json()).error.code, 'INVALID_METADATA');
+
+    const providerFailure = await sendUpload(failurePathUrl);
+    assert.equal(providerFailure.status, 502);
+    assert.equal((await providerFailure.json()).error.code, 'AUDIO_STORAGE_FAILED');
+
+    const databaseFailure = await sendUpload(failurePathUrl);
+    assert.equal(databaseFailure.status, 500);
+    assert.equal((await databaseFailure.json()).error.code, 'SONG_SAVE_FAILED');
+
+    databaseShouldFail = false;
+    const recovered = await sendUpload(failurePathUrl);
+    assert.equal(recovered.status, 201);
+    assert.equal((await recovered.json()).song._id, 'recovered-song');
+  } finally {
+    failurePathServer.closeAllConnections();
+    await new Promise((resolve, reject) => failurePathServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('provider response timeout keeps the upload slot until late provider completion and starts cleanup', async () => {
+  let notifyProviderStarted;
+  const providerStarted = new Promise((resolve) => { notifyProviderStarted = resolve; });
+  let finishProvider;
+  const providerGate = new Promise((resolve) => { finishProvider = resolve; });
+  let notifyCleanupStarted;
+  const cleanupStarted = new Promise((resolve) => { notifyCleanupStarted = resolve; });
+  let finishCleanup;
+  const cleanupGate = new Promise((resolve) => { finishCleanup = resolve; });
+  let providerCalls = 0;
+  const deleted = [];
+  const timeoutApp = createApp({
+    songModel: model,
+    uploadLimitBytes: 1024,
+    imageKitResponseTimeoutMs: 10,
+    rateLimitConfig: highTestRateLimits,
+    uploadFile: async () => {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        notifyProviderStarted();
+        return providerGate;
+      }
+      return { fileId: 'recovered-after-timeout', url: 'https://ik.example.invalid/audio' };
+    },
+    deleteFile: async (fileId) => {
+      deleted.push(fileId);
+      notifyCleanupStarted();
+      await cleanupGate;
+    },
+    isDatabaseReady: () => true,
+  });
+  const timeoutServer = timeoutApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => timeoutServer.once('listening', resolve));
+  const timeoutUrl = `http://127.0.0.1:${timeoutServer.address().port}`;
+  const firstUpload = sendUpload(timeoutUrl);
+  try {
+    await providerStarted;
+    const timedOut = await firstUpload;
+    assert.equal(timedOut.status, 504);
+    assert.equal((await timedOut.json()).error.code, 'AUDIO_STORAGE_TIMEOUT');
+
+    const whileProviderActive = await sendUpload(timeoutUrl);
+    assert.equal(whileProviderActive.status, 503);
+    assert.equal((await whileProviderActive.json()).error.code, 'UPLOAD_BUSY');
+    assert.equal(providerCalls, 1);
+
+    finishProvider({ fileId: 'late-provider-asset', url: 'https://ik.example.invalid/late-audio' });
+    await cleanupStarted;
+    assert.deepEqual(deleted, ['late-provider-asset']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const recovered = await sendUpload(timeoutUrl);
+    assert.equal(recovered.status, 201);
+    assert.equal(providerCalls, 2);
+    finishCleanup();
+  } finally {
+    finishProvider({ fileId: 'late-provider-asset', url: 'https://ik.example.invalid/late-audio' });
+    finishCleanup();
+    timeoutServer.closeAllConnections();
+    await new Promise((resolve, reject) => timeoutServer.close((error) => error ? reject(error) : resolve()));
   }
 });
 
@@ -336,6 +496,7 @@ test('database query failures return a safe common error response', async () => 
   const queryFailureApp = createApp({
     songModel: createSongModel({ findError: new Error('database details must stay private') }),
     isDatabaseReady: () => true,
+    rateLimitConfig: highTestRateLimits,
   });
   const queryFailureServer = queryFailureApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => queryFailureServer.once('listening', resolve));

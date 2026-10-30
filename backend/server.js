@@ -7,11 +7,11 @@ if (!/^\d+$/.test(configuredPort) || Number(configuredPort) < 1 || Number(config
   throw new Error('PORT must be an integer between 1 and 65535.');
 }
 
-async function startServer() {
+async function startServer({ app: serverApp = app } = {}) {
   await connectToDB();
 
   return new Promise((resolve, reject) => {
-    const server = app.listen(Number(configuredPort), () => {
+    const server = serverApp.listen(Number(configuredPort), () => {
       console.log(`Server is running on port ${configuredPort}`);
       resolve(server);
     });

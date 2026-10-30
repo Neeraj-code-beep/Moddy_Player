@@ -1,5 +1,6 @@
 const path = require('node:path');
 const ApiError = require('./api-error');
+const { normalizeMood } = require('../service/recommendation.service');
 
 const AUDIO_TYPES = {
   '.mp3': ['audio/mpeg', 'audio/mp3'],
@@ -49,10 +50,10 @@ function validateAudioFile(file) {
 }
 
 function validateSongMetadata(body) {
-  const allowedFields = new Set(['title', 'artist', 'mood']);
+  const allowedFields = new Set(['title', 'artist', 'mood', 'genre', 'energy', 'tags']);
   const unexpectedFields = Object.keys(body || {}).filter((key) => !allowedFields.has(key));
   if (unexpectedFields.length > 0) {
-    throw new ApiError(400, 'UNEXPECTED_FIELDS', 'Only title, artist, and mood fields are accepted.');
+    throw new ApiError(400, 'UNEXPECTED_FIELDS', 'Only title, artist, mood, genre, energy, and tags fields are accepted.');
   }
 
   const limits = { title: 120, artist: 120, mood: 40 };
@@ -69,6 +70,35 @@ function validateSongMetadata(body) {
       throw new ApiError(400, 'INVALID_METADATA', `${field} must be ${maxLength} characters or fewer.`);
     }
     metadata[field] = trimmedValue;
+  }
+
+  const normalizedMood = normalizeMood(metadata.mood);
+  if (normalizedMood) metadata.mood = normalizedMood;
+
+  if (body.genre !== undefined && body.genre !== '') {
+    if (typeof body.genre !== 'string' || body.genre.trim().length > 60) {
+      throw new ApiError(400, 'INVALID_METADATA', 'genre must be 60 characters or fewer.');
+    }
+    if (body.genre.trim()) metadata.genre = body.genre.trim().toLowerCase().slice(0, 60);
+  }
+
+  if (body.energy !== undefined && body.energy !== '') {
+    if (typeof body.energy !== 'string' || !['low', 'medium', 'high'].includes(body.energy.trim().toLowerCase())) {
+      throw new ApiError(400, 'INVALID_METADATA', 'energy must be low, medium, or high.');
+    }
+    metadata.energy = body.energy.trim().toLowerCase();
+  }
+
+  if (body.tags !== undefined && body.tags !== '') {
+    if (typeof body.tags !== 'string' && !Array.isArray(body.tags)) {
+      throw new ApiError(400, 'INVALID_METADATA', 'tags must be a comma-separated string or list.');
+    }
+    const submittedTags = Array.isArray(body.tags) ? body.tags : String(body.tags).split(',');
+    if (submittedTags.length > 5 || submittedTags.some((tag) => typeof tag !== 'string' || tag.trim().length > 30)) {
+      throw new ApiError(400, 'INVALID_METADATA', 'tags must contain at most 5 values of 30 characters or fewer.');
+    }
+    const tags = [...new Set(submittedTags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
+    if (tags.length) metadata.tags = tags;
   }
 
   return metadata;

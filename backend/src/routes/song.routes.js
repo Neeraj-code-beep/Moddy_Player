@@ -2,9 +2,14 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
 const multer = require('multer');
+const mongoose = require('mongoose');
 const ApiError = require('../utils/api-error');
 const { validateAudioDeclaration, validateAudioFile, validateSongMetadata } = require('../utils/audio-validation');
 const defaultSongModel = require('../models/song.model');
+const defaultFeedbackModel = require('../models/feedback.model');
+const defaultFeedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
+const { getRecommendations, validateRecommendationRequest, normalizeIntention } = require('../service/recommendation.service');
+const { reserveFeedbackSlot } = require('../service/feedback-quota.service');
 
 const DEFAULT_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
 const MAX_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
@@ -13,6 +18,9 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MAX_PAGE = 1_000_000;
 const MAX_CONCURRENT_UPLOADS = 1;
+let activeUploads = 0;
+const DEFAULT_IMAGEKIT_RESPONSE_TIMEOUT_MS = 30_000;
+const MAX_IMAGEKIT_RESPONSE_TIMEOUT_MS = 120_000;
 
 function getUploadLimitBytes(value = process.env.MAX_UPLOAD_SIZE_BYTES) {
   if (value === undefined || value === '') return DEFAULT_UPLOAD_LIMIT_BYTES;
@@ -22,6 +30,16 @@ function getUploadLimitBytes(value = process.env.MAX_UPLOAD_SIZE_BYTES) {
     throw new Error('MAX_UPLOAD_SIZE_BYTES must be between 1 byte and 100 MiB.');
   }
   return bytes;
+}
+
+function getImageKitResponseTimeoutMs(value = process.env.IMAGEKIT_UPLOAD_RESPONSE_TIMEOUT_MS) {
+  if (value === undefined || value === '') return DEFAULT_IMAGEKIT_RESPONSE_TIMEOUT_MS;
+  if (!/^\d+$/.test(String(value))) throw new Error('IMAGEKIT_UPLOAD_RESPONSE_TIMEOUT_MS must be a positive integer.');
+  const timeout = Number(value);
+  if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > MAX_IMAGEKIT_RESPONSE_TIMEOUT_MS) {
+    throw new Error('IMAGEKIT_UPLOAD_RESPONSE_TIMEOUT_MS must be between 1000 and 120000.');
+  }
+  return timeout;
 }
 
 function parsePositiveInteger(value, field, defaultValue, maxValue) {
@@ -49,9 +67,14 @@ function mapMulterError(error) {
 
 function createSongRouter({
   songModel = defaultSongModel,
+  feedbackModel = defaultFeedbackModel,
+  feedbackSessionQuotaModel = defaultFeedbackSessionQuotaModel,
   uploadFile: configuredUploadFile,
   deleteFile: configuredDeleteFile,
   uploadLimitBytes = getUploadLimitBytes(),
+  imageKitResponseTimeoutMs = getImageKitResponseTimeoutMs(),
+  rateLimiters = {},
+  onFeedbackDatabaseError,
 } = {}) {
   const uploadFile = configuredUploadFile || ((...args) => require('../service/storage.service')(...args));
   const deleteFile = configuredDeleteFile || ((fileId) => require('../service/storage.service').deleteFile(fileId));
@@ -61,9 +84,9 @@ function createSongRouter({
     limits: {
       fileSize: uploadLimitBytes,
       files: 1,
-      fields: 3,
-      // Busboy signals the limit on reaching the configured number, so 5 permits 4 parts.
-      parts: 5,
+      fields: 6,
+      // Busboy signals the limit at the configured count; 8 permits 7 actual parts.
+      parts: 8,
       fieldNameSize: 50,
       fieldSize: 1024,
     },
@@ -76,8 +99,6 @@ function createSongRouter({
       }
     },
   });
-  let activeUploads = 0;
-
   function limitConcurrentUploads(req, res, next) {
     if (activeUploads >= MAX_CONCURRENT_UPLOADS) {
       return next(new ApiError(503, 'UPLOAD_BUSY', 'Another upload is in progress. Please retry shortly.'));
@@ -90,16 +111,23 @@ function createSongRouter({
       released = true;
       activeUploads -= 1;
     };
-    res.once('finish', releaseSlot);
-    res.once('close', releaseSlot);
+    req.releaseUploadSlot = releaseSlot;
     next();
   }
 
   function parseUpload(req, res, next) {
-    upload.single('audio')(req, res, (error) => {
-      if (error) return next(mapMulterError(error));
-      next();
-    });
+    try {
+      upload.single('audio')(req, res, (error) => {
+        if (error) {
+          req.releaseUploadSlot?.();
+          return next(mapMulterError(error));
+        }
+        next();
+      });
+    } catch (error) {
+      req.releaseUploadSlot?.();
+      next(mapMulterError(error));
+    }
   }
 
   async function removeUploadedAsset(fileId) {
@@ -111,38 +139,73 @@ function createSongRouter({
     }
   }
 
-  router.post('/songs', limitConcurrentUploads, parseUpload, async (req, res) => {
-    const metadata = validateSongMetadata(req.body);
-    if (!req.file) throw new ApiError(400, 'AUDIO_REQUIRED', 'An audio file in the audio field is required.');
-    validateAudioFile(req.file);
-
-    const extension = path.extname(req.file.originalname).toLowerCase();
-    const providerFileName = `${crypto.randomUUID()}${extension}`;
-    let uploadedAsset;
-
+  router.post('/songs', rateLimiters.upload || ((req, res, next) => next()), limitConcurrentUploads, parseUpload, async (req, res) => {
     try {
-      uploadedAsset = await uploadFile(req.file, providerFileName);
-    } catch (error) {
-      throw new ApiError(502, 'AUDIO_STORAGE_FAILED', 'The audio file could not be stored.', error);
-    }
+      if (req.aborted || res.destroyed) return;
+      const metadata = validateSongMetadata(req.body);
+      if (!req.file) throw new ApiError(400, 'AUDIO_REQUIRED', 'An audio file in the audio field is required.');
+      validateAudioFile(req.file);
 
-    if (!uploadedAsset?.fileId || typeof uploadedAsset.url !== 'string' || !uploadedAsset.url.startsWith('https://')) {
-      await removeUploadedAsset(uploadedAsset?.fileId);
-      throw new ApiError(502, 'AUDIO_STORAGE_FAILED', 'The audio storage provider returned an invalid result.');
-    }
+      const extension = path.extname(req.file.originalname).toLowerCase();
+      const providerFileName = `${crypto.randomUUID()}${extension}`;
+      let uploadedAsset;
+      let providerTimeout;
+      const providerResult = Promise.resolve().then(() => uploadFile(req.file, providerFileName)).then(
+        (asset) => ({ type: 'success', asset }),
+        (error) => ({ type: 'failure', error }),
+      );
+      const timeoutResult = new Promise((resolve) => {
+        providerTimeout = setTimeout(() => resolve({ type: 'timeout' }), imageKitResponseTimeoutMs);
+      });
+      const outcome = await Promise.race([providerResult, timeoutResult]);
+      if (outcome.type === 'timeout') {
+        // The SDK cannot cancel the network call. Keep the slot until it settles,
+        // and initiate cleanup for any asset that arrives after the timeout.
+        req.deferUploadSlotRelease = true;
+        providerResult
+          .then((lateResult) => {
+            if (lateResult.type === 'success') void removeUploadedAsset(lateResult.asset?.fileId);
+          })
+          .finally(() => req.releaseUploadSlot?.());
+        if (res.destroyed) return;
+        throw new ApiError(504, 'AUDIO_STORAGE_TIMEOUT', 'The audio storage provider did not respond in time.');
+      }
+      clearTimeout(providerTimeout);
+      if (outcome.type === 'failure') {
+        throw new ApiError(502, 'AUDIO_STORAGE_FAILED', 'The audio file could not be stored.', outcome.error);
+      }
+      uploadedAsset = outcome.asset;
 
-    let song;
-    try {
-      song = await songModel.create({ ...metadata, audio: uploadedAsset.url });
-    } catch (error) {
-      await removeUploadedAsset(uploadedAsset.fileId);
-      throw new ApiError(500, 'SONG_SAVE_FAILED', 'The song could not be saved.', error);
-    }
+      if (res.destroyed) {
+        await removeUploadedAsset(uploadedAsset?.fileId);
+        return;
+      }
+      if (!uploadedAsset?.fileId || typeof uploadedAsset.url !== 'string' || !uploadedAsset.url.startsWith('https://')) {
+        await removeUploadedAsset(uploadedAsset?.fileId);
+        throw new ApiError(502, 'AUDIO_STORAGE_FAILED', 'The audio storage provider returned an invalid result.');
+      }
 
-    res.status(201).json({ message: 'Song created successfully', song });
+      let song;
+      try {
+        song = await songModel.create({
+          ...metadata,
+          audio: uploadedAsset.url,
+          storageFileId: uploadedAsset.fileId,
+        });
+      } catch (error) {
+        await removeUploadedAsset(uploadedAsset.fileId);
+        throw new ApiError(500, 'SONG_SAVE_FAILED', 'The song could not be saved.', error);
+      }
+
+      const songResponse = typeof song?.toObject === 'function' ? song.toObject() : { ...song };
+      delete songResponse.storageFileId;
+      res.status(201).json({ message: 'Song created successfully', song: songResponse });
+    } finally {
+      if (!req.deferUploadSlotRelease) req.releaseUploadSlot?.();
+    }
   });
 
-  router.get('/songs', async (req, res) => {
+  router.get('/songs', rateLimiters.catalog || ((req, res, next) => next()), async (req, res) => {
     const allowedParameters = new Set(['mood', 'page', 'limit']);
     if (Object.keys(req.query).some((key) => !allowedParameters.has(key))) {
       throw new ApiError(400, 'INVALID_QUERY', 'Only mood, page, and limit query parameters are accepted.');
@@ -173,8 +236,74 @@ function createSongRouter({
     });
   });
 
+  router.post('/recommendations', rateLimiters.recommendation || ((req, res, next) => next()), async (req, res) => {
+    const validation = validateRecommendationRequest(req.body);
+    if (validation.error) throw new ApiError(400, 'INVALID_RECOMMENDATION_REQUEST', validation.error);
+    const request = validation.value;
+    const recommendations = await getRecommendations(songModel, request);
+    res.status(200).json({
+      message: 'Recommendations generated successfully',
+      recommendations,
+      requestedMood: request.requestedMood,
+      normalizedMood: request.mood,
+      intention: request.intention,
+    });
+  });
+
+  router.post('/feedback', rateLimiters.feedback || ((req, res, next) => next()), async (req, res) => {
+    const runFeedbackDatabaseOperation = async (operation, run) => {
+      try {
+        return await run();
+      } catch (error) {
+        if (typeof onFeedbackDatabaseError === 'function') onFeedbackDatabaseError(operation, error);
+        throw error;
+      }
+    };
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).some((key) => !['sessionId', 'songId', 'event', 'intention'].includes(key))) {
+      throw new ApiError(400, 'INVALID_FEEDBACK', 'Feedback must contain only the supported fields.');
+    }
+    if (typeof body.sessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.sessionId)) {
+      throw new ApiError(400, 'INVALID_FEEDBACK', 'sessionId must be a valid version 4 UUID.');
+    }
+    if (typeof body.songId !== 'string' || !mongoose.Types.ObjectId.isValid(body.songId)) {
+      throw new ApiError(400, 'INVALID_FEEDBACK', 'songId must be a valid song identifier.');
+    }
+    if (!['like', 'dislike', 'skip', 'completed'].includes(body.event)) {
+      throw new ApiError(400, 'INVALID_FEEDBACK', 'event must be like, dislike, skip, or completed.');
+    }
+    const intention = normalizeIntention(body.intention);
+    if (!intention) throw new ApiError(400, 'INVALID_FEEDBACK', 'intention must be match, cheer_up, calm_down, or surprise.');
+
+    const sessionId = body.sessionId.toLowerCase();
+    const songObjectId = new mongoose.Types.ObjectId(body.songId);
+    const songExists = await runFeedbackDatabaseOperation('songModel.exists', () => songModel.exists({ _id: songObjectId }));
+    if (!songExists) throw new ApiError(404, 'SONG_NOT_FOUND', 'The song was not found.');
+    const quotaExists = await runFeedbackDatabaseOperation('feedbackSessionQuotaModel.exists', () => feedbackSessionQuotaModel.exists({ sessionId }));
+    const existingFeedbackCount = quotaExists ? 0 : await runFeedbackDatabaseOperation(
+      'feedbackModel.countDocuments',
+      () => feedbackModel.countDocuments({ sessionId }),
+    );
+    const reservation = await runFeedbackDatabaseOperation(
+      'feedbackSessionQuotaModel.findOneAndUpdate',
+      () => reserveFeedbackSlot(feedbackSessionQuotaModel, sessionId, new Date(), existingFeedbackCount),
+    );
+    if (!reservation) {
+      throw new ApiError(429, 'FEEDBACK_LIMIT_REACHED', 'This listening session has reached its feedback limit.');
+    }
+    await runFeedbackDatabaseOperation('feedbackModel.create', () => feedbackModel.create({
+      sessionId,
+      songId: songObjectId,
+      event: body.event,
+      intention,
+    }));
+    res.status(202).json({ message: 'Feedback recorded.' });
+  });
+
   return router;
 }
 
 module.exports = createSongRouter;
 module.exports.getUploadLimitBytes = getUploadLimitBytes;
+module.exports.getImageKitResponseTimeoutMs = getImageKitResponseTimeoutMs;

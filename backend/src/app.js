@@ -3,6 +3,9 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const createSongRouter = require('./routes/song.routes');
 const ApiError = require('./utils/api-error');
+const { createRateLimiters, getRateLimitConfig, InMemoryRateLimitStore } = require('./middleware/rate-limit');
+
+const processRateLimitStore = new InMemoryRateLimitStore();
 
 function normalizeError(error) {
   if (error instanceof ApiError) return error;
@@ -34,6 +37,19 @@ function getCorsOrigins(configuredOrigins = process.env.CORS_ALLOWED_ORIGINS) {
 
 function createApp(options = {}) {
   const app = express();
+  const rateLimitConfig = options.rateLimitConfig || getRateLimitConfig();
+  const rateLimiters = createRateLimiters({
+    config: rateLimitConfig,
+    store: options.rateLimitStore || processRateLimitStore,
+  });
+  if (rateLimitConfig.trustedProxyHops > 0) app.set('trust proxy', rateLimitConfig.trustedProxyHops);
+  app.use((req, res, next) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('X-Frame-Options', 'DENY');
+    res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.set('X-Permitted-Cross-Domain-Policies', 'none');
+    next();
+  });
   const allowedOrigins = options.corsOrigins || getCorsOrigins();
   app.use(cors({
     origin(origin, callback) {
@@ -48,8 +64,9 @@ function createApp(options = {}) {
       : mongoose.connection.readyState === 1;
     res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready' });
   });
+  app.get('/live', (req, res) => res.status(200).json({ status: 'live' }));
 
-  app.use('/', createSongRouter(options));
+  app.use('/', createSongRouter({ ...options, rateLimiters }));
   app.use((req, res, next) => {
     next(new ApiError(404, 'NOT_FOUND', 'The requested endpoint was not found.'));
   });
