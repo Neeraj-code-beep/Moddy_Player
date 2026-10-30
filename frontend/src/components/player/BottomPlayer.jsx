@@ -1,119 +1,131 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion as Motion } from 'framer-motion';
-import { Play, Pause, SkipBack, SkipForward, Volume2, Music2 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Music2 } from 'lucide-react';
+import { formatPlaybackTime } from '../../lib/format-playback-time';
 
 const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, onEnded }) => {
   const audioRef = useRef(null);
-  const [progress, setProgress] = useState(0);
+  const playbackAttemptRef = useRef(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.7);
+  const [playbackError, setPlaybackError] = useState('');
+  const canSeek = Number.isFinite(duration) && duration > 0;
 
   useEffect(() => {
-    if (isPlaying && audioRef.current) {
-      audioRef.current.play().catch((err) => console.log('Autoplay blocked:', err));
-    } else if (!isPlaying && audioRef.current) {
-      audioRef.current.pause();
+    const audio = audioRef.current;
+    if (!audio) return undefined;
+    const attempt = ++playbackAttemptRef.current;
+    if (isPlaying) {
+      audio.play().then(() => {
+        if (attempt === playbackAttemptRef.current) setPlaybackError('');
+      }).catch(() => {
+        if (attempt !== playbackAttemptRef.current) return;
+        setPlaybackError('Playback could not start. Check the audio source and try again.');
+        setIsPlaying(false);
+      });
+    } else {
+      audio.pause();
     }
-  }, [isPlaying, currentSong]);
+    return () => { playbackAttemptRef.current += 1; };
+  }, [isPlaying, currentSong, setIsPlaying]);
 
-  const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setProgress((audioRef.current.currentTime / audioRef.current.duration) * 100 || 0);
-    }
-  };
-
-  const handleSeek = (e) => {
-    if (audioRef.current) {
-      const seekTime = (e.target.value / 100) * audioRef.current.duration;
-      audioRef.current.currentTime = seekTime;
-      setProgress(e.target.value);
-    }
-  };
-
-  const togglePlay = () => {
-    setIsPlaying(!isPlaying);
-  };
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume, currentSong]);
 
   if (!currentSong) return null;
 
-  return (
-    <Motion.div
-      initial={{ y: 100, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      exit={{ y: 100, opacity: 0 }}
-      transition={{ type: 'spring', stiffness: 200, damping: 25 }}
-      className="fixed bottom-0 left-0 right-0 z-50 p-4 pb-6 md:pb-4"
-    >
-      <div className="max-w-6xl mx-auto glass-panel rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 border border-white/10 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-        
-        {/* Hidden Audio Element */}
-        <audio
-          ref={audioRef}
-          src={currentSong.audio}
-          onLoadStart={() => setProgress(0)}
-          onTimeUpdate={handleTimeUpdate}
-          onEnded={onEnded}
-          className="hidden"
-        />
+  const handleSeek = (event) => {
+    const time = Number(event.target.value);
+    if (!audioRef.current || !canSeek) return;
+    audioRef.current.currentTime = time;
+    setCurrentTime(time);
+  };
 
-        {/* Track Info */}
-        <div className="flex items-center gap-4 w-full md:w-1/3">
-          <Motion.div
-            animate={{ rotate: isPlaying ? 360 : 0 }}
-            transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
-            className={cn(
-              "w-12 h-12 rounded-full flex items-center justify-center bg-gradient-to-tr from-primary to-accent shadow-lg",
-              !isPlaying && "animation-paused"
-            )}
-            style={{ animationPlayState: isPlaying ? 'running' : 'paused' }}
-          >
-            <Music2 className="w-5 h-5 text-white" />
-          </Motion.div>
-          <div className="flex flex-col overflow-hidden">
-            <span className="text-white font-semibold truncate">{currentSong.title}</span>
-            <span className="text-gray-400 text-sm truncate">{currentSong.artist}</span>
+  const handlePlay = () => {
+    setPlaybackError('');
+    setIsPlaying((playing) => !playing);
+  };
+
+  const handleError = () => {
+    setPlaybackError('This track could not be loaded. Try another recommendation.');
+    setIsPlaying(false);
+  };
+
+  return (
+    <Motion.section
+      initial={{ y: 32, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 32, opacity: 0 }}
+      transition={{ duration: 0.22 }}
+      aria-label="Music player"
+      className="fixed inset-x-0 bottom-0 z-50 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-6"
+    >
+      <audio
+        key={currentSong.audio}
+        ref={audioRef}
+        src={currentSong.audio}
+        preload="metadata"
+        onLoadStart={() => { setCurrentTime(0); setDuration(0); setPlaybackError(''); }}
+        onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onEnded={onEnded}
+        onError={handleError}
+        className="sr-only"
+      />
+      <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 rounded-2xl border border-white/10 bg-[#171715]/95 p-3 shadow-[0_-12px_48px_rgba(0,0,0,0.42)] backdrop-blur-xl md:grid-cols-[1fr_1.2fr_1fr] md:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-200/10 text-amber-100">
+            <Music2 aria-hidden="true" className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-white">{currentSong.title || 'Untitled track'}</p>
+            <p className="truncate text-xs text-white/55">{currentSong.artist || 'Unknown artist'}</p>
           </div>
         </div>
 
-        {/* Controls */}
-        <div className="flex flex-col items-center w-full md:w-1/3 gap-2">
-          <div className="flex items-center gap-6">
-            <button onClick={onPrev} className="text-gray-400 hover:text-white transition-colors">
-              <SkipBack className="w-5 h-5" />
+        <div className="col-span-2 flex min-w-0 flex-col items-center gap-2 md:col-span-1">
+          <div className="flex items-center gap-5">
+            <button type="button" onClick={onPrev} aria-label="Play previous track" className="player-icon-button">
+              <SkipBack aria-hidden="true" className="h-4 w-4" />
             </button>
-            <button
-              onClick={togglePlay}
-              className="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
-            >
-              {isPlaying ? <Pause className="w-5 h-5 fill-black" /> : <Play className="w-5 h-5 fill-black ml-1" />}
+            <button type="button" onClick={handlePlay} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 text-[#171715] transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-100">
+              {isPlaying ? <Pause aria-hidden="true" className="h-4 w-4 fill-current" /> : <Play aria-hidden="true" className="ml-0.5 h-4 w-4 fill-current" />}
             </button>
-            <button onClick={onNext} className="text-gray-400 hover:text-white transition-colors">
-              <SkipForward className="w-5 h-5" />
+            <button type="button" onClick={onNext} aria-label="Play next track" className="player-icon-button">
+              <SkipForward aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
-          
-          {/* Progress Bar */}
-          <div className="w-full flex items-center gap-2 group">
+          <div className="flex w-full items-center gap-2 text-[10px] tabular-nums text-white/50">
+            <span aria-hidden="true">{formatPlaybackTime(currentTime)}</span>
             <input
               type="range"
               min="0"
-              max="100"
-              value={progress}
+              max={canSeek ? duration : 1}
+              step="0.1"
+              value={canSeek ? Math.min(currentTime, duration) : 0}
               onChange={handleSeek}
-              className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-primary group-hover:h-2 transition-all"
+              disabled={!canSeek}
+              aria-label="Seek track"
+              aria-valuetext={`${formatPlaybackTime(currentTime)} of ${formatPlaybackTime(duration)}`}
+              className="h-2 min-w-0 flex-1 cursor-pointer accent-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
             />
+            <span aria-hidden="true">{formatPlaybackTime(duration)}</span>
           </div>
         </div>
 
-        {/* Extra Controls */}
-        <div className="hidden md:flex items-center justify-end w-1/3 gap-3">
-          <Volume2 className="w-5 h-5 text-gray-400" />
-          <div className="w-24 h-1 bg-gray-700 rounded-lg">
-            <div className="w-2/3 h-full bg-gray-300 rounded-lg"></div>
-          </div>
+        <div className="hidden items-center justify-end gap-2 md:flex">
+          <label htmlFor="player-volume" className="text-white/60">
+            {volume === 0 ? <VolumeX aria-hidden="true" className="h-4 w-4" /> : <Volume2 aria-hidden="true" className="h-4 w-4" />}
+            <span className="sr-only">Volume</span>
+          </label>
+          <input id="player-volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} aria-label="Volume" className="h-2 w-24 cursor-pointer accent-amber-100" />
         </div>
-
+        {playbackError && <p role="alert" className="col-span-2 text-xs text-amber-100 md:col-span-3">{playbackError}</p>}
       </div>
-    </Motion.div>
+    </Motion.section>
   );
 };
 

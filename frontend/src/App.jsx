@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
-import Lenis from 'lenis';
+import React, { useState, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 
 import Navbar from './components/layout/Navbar';
@@ -18,30 +17,6 @@ const App = () => {
   const [recommendationError, setRecommendationError] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const recommendationSequenceRef = useRef(0);
-
-  useEffect(() => {
-    const lenis = new Lenis({
-      duration: 1.2,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      orientation: 'vertical',
-      gestureOrientation: 'vertical',
-      smoothWheel: true,
-      wheelMultiplier: 1,
-      smoothTouch: false,
-      touchMultiplier: 2,
-      infinite: false,
-    });
-    let animationFrame;
-    function raf(time) {
-      lenis.raf(time);
-      animationFrame = requestAnimationFrame(raf);
-    }
-    animationFrame = requestAnimationFrame(raf);
-    return () => {
-      cancelAnimationFrame(animationFrame);
-      lenis.destroy();
-    };
-  }, []);
 
   const handleRecommend = async (request, options) => {
     const sequence = ++recommendationSequenceRef.current;
@@ -115,11 +90,9 @@ const App = () => {
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/30 relative">
       <Navbar />
-      <main>
+      <main className={currentSong ? 'pb-40 md:pb-32' : ''}>
         <Hero />
-        <div id="discover">
-          <MoodDetector onRecommend={handleRecommend} isLoading={isLoading} error={recommendationError} />
-        </div>
+        <MoodDetector onRecommend={handleRecommend} isLoading={isLoading} error={recommendationError} />
         <AnimatePresence mode="wait">
           {recommendationResult && (
             <MoodSongs

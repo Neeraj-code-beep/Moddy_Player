@@ -1,101 +1,44 @@
 import { motion as Motion } from 'framer-motion';
-import { ArrowDown, Sparkles } from 'lucide-react';
+import { ArrowDown, AudioLines } from 'lucide-react';
 
-const Hero = () => {
-  const headline = 'Your AI-Powered Soundtrack';
+const Hero = () => (
+  <section id="home" aria-labelledby="home-title" className="relative flex min-h-[min(780px,92svh)] items-center justify-center overflow-hidden px-5 pb-20 pt-28 sm:px-8">
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="absolute left-1/2 top-1/4 h-[22rem] w-[22rem] -translate-x-1/2 rounded-full bg-amber-200/10 blur-[100px] sm:h-[34rem] sm:w-[34rem]" />
+      <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-background to-transparent" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,.025)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.025)_1px,transparent_1px)] bg-[size:56px_56px] [mask-image:linear-gradient(to_bottom,black,transparent_78%)]" />
+    </div>
 
-  return (
-    <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden pt-20">
-      {/* Background Effects */}
-      <div className="absolute inset-0 z-0">
-        <div className="absolute top-[20%] left-[10%] w-[400px] h-[400px] bg-primary/30 rounded-full blur-[120px] mix-blend-screen animate-[blob_7s_infinite]" />
-        <div className="absolute top-[40%] right-[10%] w-[350px] h-[350px] bg-secondary/30 rounded-full blur-[120px] mix-blend-screen animate-[blob_7s_infinite_2s]" />
-        <div className="absolute -bottom-[20%] left-[40%] w-[500px] h-[500px] bg-accent/20 rounded-full blur-[150px] mix-blend-screen animate-[blob_7s_infinite_4s]" />
-
-        {/* Subtle Noise Overlay */}
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay"></div>
+    <Motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45 }}
+      className="relative z-10 mx-auto flex max-w-4xl flex-col items-center text-center"
+    >
+      <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-amber-100/15 bg-white/[0.04] px-4 py-2 text-xs font-medium tracking-wide text-amber-100/90 sm:text-sm">
+        <AudioLines aria-hidden="true" className="h-4 w-4" />
+        A soundtrack that meets the moment
       </div>
-
-      <div className="relative z-10 text-center px-6 max-w-4xl mx-auto flex flex-col items-center">
-        <Motion.div
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.8, ease: 'easeOut' }}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 bg-white/5 backdrop-blur-md mb-8"
-        >
-          <Sparkles className="w-4 h-4 text-secondary" />
-          <span className="text-sm font-medium text-gray-300">
-            Next-gen Music Experience
-          </span>
-        </Motion.div>
-
-        <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-6">
-          {headline.split('').map((char, index) => (
-            <Motion.span
-              key={index}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                duration: 0.5,
-                delay: index * 0.05,
-                type: 'spring',
-                damping: 12,
-                stiffness: 200,
-              }}
-              className="inline-block bg-clip-text text-transparent bg-linear-to-r from-white via-gray-200 to-gray-500"
-            >
-              {char === ' ' ? '\u00A0' : char}
-            </Motion.span>
-          ))}
-        </h1>
-
-        <Motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1.5, duration: 0.8 }}
-          className="text-lg md:text-xl text-gray-400 mb-12 max-w-2xl mx-auto leading-relaxed"
-        >
-          Let our advanced AI analyze your emotions and curate the perfect
-          playlist. Music that feels exactly how you do right now.
-        </Motion.p>
-
-        <Motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1.8, duration: 0.8 }}
-          className="flex flex-col sm:flex-row gap-4"
-        >
-          <button
-            onClick={() => {
-              document
-                .getElementById('detector-section')
-                ?.scrollIntoView({ behavior: 'smooth' });
-            }}
-            className="group relative px-8 py-4 bg-white text-black font-bold rounded-full overflow-hidden transition-transform hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:shadow-[0_0_40px_rgba(255,255,255,0.4)]"
-          >
-            <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-gray-100 to-white group-hover:from-white group-hover:to-gray-100 transition-colors"></div>
-            <span className="relative flex items-center gap-2">
-              Start Scanning{' '}
-              <ArrowDown className="w-5 h-5 group-hover:translate-y-1 transition-transform" />
-            </span>
-          </button>
-        </Motion.div>
-      </div>
-
-      {/* Scroll indicator */}
-      <Motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 2.5, duration: 1 }}
-        className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-50"
+      <h1 id="home-title" className="max-w-4xl text-balance text-5xl font-semibold leading-[1.04] tracking-[-0.055em] text-white sm:text-6xl md:text-7xl lg:text-[5.5rem]">
+        Find the feeling in your next song.
+      </h1>
+      <p className="mt-6 max-w-2xl text-pretty text-base leading-7 text-white/60 sm:text-lg sm:leading-8">
+        Choose a mood and listening intention. Moddy shapes a thoughtful set of tracks from the music available in its catalog.
+      </p>
+      <a
+        href="#discover"
+        className="mt-9 inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-amber-100 px-6 py-3 text-sm font-semibold text-[#201b13] transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-amber-100"
       >
-        <span className="text-xs uppercase tracking-widest text-gray-500">
-          Scroll to discover
-        </span>
-        <div className="w-[1px] h-12 bg-gradient-to-b from-gray-500 to-transparent"></div>
-      </Motion.div>
-    </section>
-  );
-};
+        Explore your mood
+        <ArrowDown aria-hidden="true" className="h-4 w-4" />
+      </a>
+      <div aria-hidden="true" className="mt-14 flex h-16 items-center gap-1.5 opacity-50">
+        {[14, 27, 19, 35, 22, 42, 18, 31, 13, 25, 38, 17, 29, 12, 22, 36, 18, 28, 14, 33, 20, 12, 26, 17, 35, 21, 13, 30, 18].map((height, index) => (
+          <span key={index} className="w-1 rounded-full bg-gradient-to-t from-amber-800 to-amber-100/80" style={{ height }} />
+        ))}
+      </div>
+    </Motion.div>
+  </section>
+);
 
 export default Hero;

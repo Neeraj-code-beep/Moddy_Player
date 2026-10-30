@@ -1,99 +1,115 @@
-import { useState, useEffect } from 'react';
-import { motion as Motion } from 'framer-motion';
-import { Play, Menu, X } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion as Motion } from 'framer-motion';
+import { AudioLines, Menu, X } from 'lucide-react';
+
+const links = [
+  { label: 'Home', href: '#home' },
+  { label: 'Discover', href: '#discover' },
+];
 
 const Navbar = () => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuTriggerRef = useRef(null);
 
   useEffect(() => {
-    const handleScroll = () => {
-      setScrolled(window.scrollY > 20);
-    };
-    window.addEventListener('scroll', handleScroll);
+    const handleScroll = () => setScrolled(window.scrollY > 16);
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const navLinks = ['Discover', 'Library', 'Premium'];
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const menuTrigger = menuTriggerRef.current;
+    const menu = document.getElementById('mobile-navigation');
+    const getFocusable = () => menu?.querySelectorAll('a[href], button:not([disabled])') || [];
+    getFocusable()[0]?.focus();
+    const handleMenuKey = (event) => {
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = getFocusable();
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleMenuKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handleMenuKey);
+      document.body.style.overflow = '';
+      menuTrigger?.focus();
+    };
+  }, [mobileMenuOpen]);
+
+  const closeMenu = () => setMobileMenuOpen(false);
 
   return (
     <>
-      <Motion.nav
-        initial={{ y: -100 }}
-        animate={{ y: 0 }}
-        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-        className={cn(
-          'fixed top-0 left-0 right-0 z-50 transition-all duration-300 ease-in-out px-6 py-4 flex items-center justify-between',
-          scrolled ? 'glass-panel border-b border-white/10' : 'bg-transparent'
-        )}
-      >
-        <div className="flex items-center gap-2 cursor-pointer group">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary to-secondary flex items-center justify-center group-hover:scale-110 transition-transform">
-            <Play className="w-4 h-4 text-white fill-white ml-0.5" />
+      <header className={`fixed inset-x-0 top-0 z-40 border-b transition-colors duration-200 ${scrolled ? 'border-white/10 bg-[#10100f]/90 backdrop-blur-xl' : 'border-transparent bg-transparent'}`}>
+        <nav aria-label="Main navigation" className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-8">
+          <a href="#home" className="inline-flex items-center gap-2.5 rounded-md text-white" aria-label="Moddy Player home">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-100 text-[#201b13]">
+              <AudioLines aria-hidden="true" className="h-4 w-4" />
+            </span>
+            <span className="text-base font-semibold tracking-tight">moddy<span className="text-amber-100">.</span></span>
+          </a>
+
+          <div className="hidden items-center gap-8 md:flex">
+            {links.map((link) => <a key={link.href} href={link.href} className="rounded py-2 text-sm text-white/65 transition hover:text-white">{link.label}</a>)}
           </div>
-          <span className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-            Moddy
-          </span>
-        </div>
 
-        <div className="hidden md:flex items-center gap-8">
-          {navLinks.map((link) => (
-            <a
-              key={link}
-              href={`#${link.toLowerCase()}`}
-              className="text-sm font-medium text-gray-300 hover:text-white transition-colors relative group"
-            >
-              {link}
-              <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-secondary transition-all group-hover:w-full"></span>
-            </a>
-          ))}
-        </div>
-
-        <div className="hidden md:block">
-          <button className="px-5 py-2 rounded-full bg-white text-black font-semibold text-sm hover:scale-105 active:scale-95 transition-all shadow-[0_0_15px_rgba(255,255,255,0.3)] hover:shadow-[0_0_25px_rgba(255,255,255,0.5)]">
-            Log In
+          <button
+            type="button"
+            ref={menuTriggerRef}
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open navigation menu"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-navigation"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition hover:bg-white/10 md:hidden"
+          >
+            <Menu aria-hidden="true" className="h-5 w-5" />
           </button>
-        </div>
+        </nav>
+      </header>
 
-        <div className="md:hidden">
-          <button onClick={() => setMobileMenuOpen(true)} className="text-white p-2">
-            <Menu className="w-6 h-6" />
-          </button>
-        </div>
-      </Motion.nav>
-
-      {/* Mobile Menu Drawer */}
-      <Motion.div
-        className={cn(
-          'fixed inset-0 z-[60] glass-panel flex flex-col p-6',
-          mobileMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <Motion.div
+            id="mobile-navigation"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-[#10100f]/98 px-6 py-5 backdrop-blur-xl md:hidden"
+          >
+            <div className="flex justify-end">
+              <button type="button" onClick={closeMenu} aria-label="Close navigation menu" className="inline-flex h-11 w-11 items-center justify-center rounded-full text-white hover:bg-white/10">
+                <X aria-hidden="true" className="h-5 w-5" />
+              </button>
+            </div>
+            <nav aria-label="Mobile navigation" className="mt-12 flex flex-col items-center gap-5">
+              {links.map((link) => (
+                <a key={link.href} href={link.href} onClick={closeMenu} className="rounded-md px-4 py-3 text-2xl font-medium text-white/80 hover:text-amber-100">
+                  {link.label}
+                </a>
+              ))}
+            </nav>
+          </Motion.div>
         )}
-        initial={{ opacity: 0, x: '100%' }}
-        animate={{ opacity: mobileMenuOpen ? 1 : 0, x: mobileMenuOpen ? '0%' : '100%' }}
-        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-      >
-        <div className="flex justify-end">
-          <button onClick={() => setMobileMenuOpen(false)} className="text-white p-2">
-            <X className="w-8 h-8" />
-          </button>
-        </div>
-        <div className="flex flex-col gap-8 mt-12 items-center text-2xl font-semibold">
-          {navLinks.map((link) => (
-            <a
-              key={link}
-              href={`#${link.toLowerCase()}`}
-              className="text-gray-300 hover:text-white transition-colors"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              {link}
-            </a>
-          ))}
-          <button className="mt-8 px-8 py-3 rounded-full bg-gradient-to-r from-primary to-secondary text-white font-bold w-full max-w-xs shadow-lg">
-            Log In
-          </button>
-        </div>
-      </Motion.div>
+      </AnimatePresence>
     </>
   );
 };
