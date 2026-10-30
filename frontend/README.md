@@ -19,9 +19,18 @@ Run `npm install` once, then use `npm run dev` from this directory. The app expe
 
 ## Checks
 
-- `npm test` runs the frontend contract, playback-navigation, playback-time, and camera-model-cleanup tests.
+- `npm test` runs the frontend contract, playback-navigation, playback-time, and camera-model-cleanup unit tests.
+- `npx playwright install chromium` installs the browser used by the end-to-end suite (once per machine).
+- `npm run test:browser` runs the Chromium browser regression suite. The Playwright configuration starts Vite on `127.0.0.1:4175` and stops it after the run.
+- `npm run test:browser -- --grep "feedback"` runs a focused group; `npm run test:browser:ui` opens the Playwright runner UI.
+- `npx playwright show-report` opens the last HTML report. Failure screenshots, videos, traces, and reports are written to ignored `test-results/` and `playwright-report/` folders.
 - `npm run lint` runs ESLint.
 - `npm run build` creates the production bundle in `dist/`.
+- `cd ../backend; npm test` runs the backend tests. The live MongoDB integration case runs only when `MONGODB_INTEGRATION_URL` is supplied; browser tests do not start the backend.
+
+The browser suite intercepts the existing `/songs`, `/recommendations`, and `/feedback` requests with deterministic fixtures matching the frontend contracts. It never calls the configured production API, MongoDB, or ImageKit. Camera permission, media events, and face-api model loading are simulated; the suite verifies application behavior and cleanup, not physical camera access, neural inference, audio decoding, or real playback. Chromium is the only configured browser. CI installs Chromium and runs the same unit, browser, lint, and build checks from a clean install.
+
+Responsive cases use 1440 × 900, 768 × 1024, and 390 × 844 viewports. Screenshots are captured for discovery and player layout at each viewport. Axe checks common WCAG 2.1 A/AA rules on the homepage; automated checks do not replace a full accessibility review.
 
 ## Interaction and accessibility conventions
 
