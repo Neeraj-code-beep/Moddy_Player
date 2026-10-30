@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Camera cleanup test fixture</title>
+  </head>
+  <body>
+    <div id="camera-test-root"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import MoodDetector from '../src/components/MoodDetector.jsx';
+
+      const root = createRoot(document.getElementById('camera-test-root'));
+      root.render(React.createElement(MoodDetector, { onRecommend: async () => {}, isLoading: false }));
+      window.__unmountCameraHarness = () => root.unmount();
+    </script>
+  </body>
+</html>
