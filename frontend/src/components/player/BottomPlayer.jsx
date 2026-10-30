@@ -3,7 +3,7 @@ import { motion as Motion } from 'framer-motion';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Music2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) => {
+const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev, onEnded }) => {
   const audioRef = useRef(null);
   const [progress, setProgress] = useState(0);
 
@@ -49,8 +49,9 @@ const BottomPlayer = ({ currentSong, isPlaying, setIsPlaying, onNext, onPrev }) 
         <audio
           ref={audioRef}
           src={currentSong.audio}
+          onLoadStart={() => setProgress(0)}
           onTimeUpdate={handleTimeUpdate}
-          onEnded={onNext}
+          onEnded={onEnded}
           className="hidden"
         />
 

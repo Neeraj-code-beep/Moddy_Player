@@ -42,7 +42,7 @@ const Hero = () => {
                 damping: 12,
                 stiffness: 200,
               }}
-              className="inline-block bg-clip-text text-transparent bg-gradient-to-r from-white via-gray-200 to-gray-500"
+              className="inline-block bg-clip-text text-transparent bg-linear-to-r from-white via-gray-200 to-gray-500"
             >
               {char === ' ' ? '\u00A0' : char}
             </Motion.span>

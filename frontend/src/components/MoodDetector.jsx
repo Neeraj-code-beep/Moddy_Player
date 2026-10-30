@@ -1,256 +1,165 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as faceapi from 'face-api.js';
-import { fetchSongsByMood } from '../api/api';
-import { AnimatePresence } from 'framer-motion';
-import { ScanFace, Loader2, Sparkles } from 'lucide-react';
+import { motion as Motion } from 'framer-motion';
+import { Camera, Loader2, ScanFace, Sparkles } from 'lucide-react';
+import { LISTENING_INTENTIONS, MOOD_OPTIONS } from '../api/recommendation-contract';
 import { cn } from '../lib/utils';
 
-const MoodDetector = ({ setSongs }) => {
+const MoodDetector = ({ onRecommend, isLoading, error: recommendationError }) => {
   const videoRef = useRef(null);
   const scanSequenceRef = useRef(0);
+  const streamRef = useRef(null);
   const requestControllerRef = useRef(null);
-
+  const isMountedRef = useRef(true);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const [isCameraEnabled, setIsCameraEnabled] = useState(false);
+  const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [detectedMood, setDetectedMood] = useState(null);
+  const [selectedMood, setSelectedMood] = useState('');
+  const [detectedMood, setDetectedMood] = useState('');
+  const [intention, setIntention] = useState('match');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Load face-api models
-  const loadModels = async () => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      scanSequenceRef.current += 1;
+      requestControllerRef.current?.abort();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (videoRef.current && streamRef.current) videoRef.current.srcObject = streamRef.current;
+  }, [isCameraEnabled]);
+
+  const enableCamera = async () => {
+    setErrorMsg('');
+    setIsCameraLoading(true);
     try {
-      const MODEL_URL = '/models';
-
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
-
-      setIsModelLoaded(true);
-      console.log('Face-API models loaded');
-    } catch (err) {
-      console.error('Failed to load models', err);
-      setErrorMsg('Failed to load face detection models.');
-    }
-  };
-
-  // Start webcam
-  const startVideo = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
-    } catch (err) {
-      console.error('Camera access denied', err);
-      setErrorMsg('Camera access denied. Please allow camera permissions.');
+      streamRef.current = stream;
+      await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+      await faceapi.nets.faceExpressionNet.loadFromUri('/models');
+      if (!isMountedRef.current) return;
+      setIsModelLoaded(true);
+      setIsCameraEnabled(true);
+    } catch {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      if (isMountedRef.current) setErrorMsg('Camera or face detection models are unavailable. You can still choose a mood manually.');
+    } finally {
+      if (isMountedRef.current) setIsCameraLoading(false);
     }
   };
 
-  // Detect mood
-  const detectMood = async () => {
-    if (!isModelLoaded || !videoRef.current) return;
+  const disableCamera = () => {
+    scanSequenceRef.current += 1;
+    setIsScanning(false);
+    requestControllerRef.current?.abort();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setIsCameraEnabled(false);
+    setIsModelLoaded(false);
+  };
 
-    const scanSequence = ++scanSequenceRef.current;
+  const recommend = async (mood = selectedMood) => {
     requestControllerRef.current?.abort();
     const controller = new AbortController();
     requestControllerRef.current = controller;
-    setIsScanning(true);
-    setDetectedMood(null);
     setErrorMsg('');
-
     try {
-      // Premium scanning delay
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await onRecommend({ mood: mood || undefined, intention }, { signal: controller.signal });
+    } catch (error) {
+      if (error.name !== 'CanceledError' && error.name !== 'AbortError') {
+        setErrorMsg('Recommendations could not be loaded. Please try again.');
+      }
+    }
+  };
 
-      const detections = await faceapi
-        .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceExpressions();
-
+  const detectMood = async () => {
+    if (!isModelLoaded || !videoRef.current) return;
+    const scanSequence = ++scanSequenceRef.current;
+    setIsScanning(true);
+    setErrorMsg('');
+    try {
+      const detections = await faceapi.detectAllFaces(
+        videoRef.current,
+        new faceapi.TinyFaceDetectorOptions(),
+      ).withFaceLandmarks().withFaceExpressions();
       if (scanSequence !== scanSequenceRef.current) return;
-
-      if (!detections || detections.length === 0) {
-        setErrorMsg('No face detected. Please ensure you are visible.');
+      if (!detections.length) {
+        setErrorMsg('No face detected. Choose a mood manually or try scanning again.');
         return;
       }
-
       const expressions = detections[0].expressions;
-
-      const dominantMood = Object.keys(expressions).reduce((a, b) =>
-        expressions[a] > expressions[b] ? a : b,
-      );
-
-      const songs = await fetchSongsByMood(dominantMood, { signal: controller.signal });
-      if (scanSequence !== scanSequenceRef.current) return;
-
-      setDetectedMood(dominantMood);
-      setSongs(songs);
-
-      setTimeout(() => {
-        document
-          .getElementById('songs-section')
-          ?.scrollIntoView({ behavior: 'smooth' });
-      }, 500);
-
-      console.log('Detected:', dominantMood);
-    } catch (err) {
-      if (scanSequence !== scanSequenceRef.current || err.name === 'CanceledError' || err.name === 'AbortError') return;
-      console.error('Error during detection', err);
-      setErrorMsg('An error occurred during scanning.');
+      const mood = Object.keys(expressions).reduce((left, right) => expressions[left] > expressions[right] ? left : right);
+      const normalizedMood = MOOD_OPTIONS.includes(mood) ? mood : 'neutral';
+      setSelectedMood(normalizedMood);
+      setDetectedMood(normalizedMood);
+      await recommend(normalizedMood);
+    } catch {
+      if (scanSequence === scanSequenceRef.current) setErrorMsg('Mood detection failed. You can choose a mood manually.');
     } finally {
       if (scanSequence === scanSequenceRef.current) setIsScanning(false);
     }
   };
 
-  // Lifecycle
-  useEffect(() => {
-    const videoElement = videoRef.current;
-    loadModels().then(startVideo);
-
-    return () => {
-      scanSequenceRef.current += 1;
-      requestControllerRef.current?.abort();
-      if (videoElement?.srcObject) {
-        videoElement.srcObject.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, []);
+  const error = errorMsg || recommendationError;
+  const busy = isLoading || isScanning;
 
   return (
-    <section
-      id="detector-section"
-      className="relative w-full max-w-4xl mx-auto py-24 px-6 flex flex-col items-center"
-    >
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true }}
-        className="text-center mb-12"
-      >
-        <h2 className="text-3xl md:text-5xl font-bold mb-4 bg-clip-text text-transparent bg-linear-to-r from-white to-gray-400">
-          AI Emotion Analysis
-        </h2>
+    <section id="detector-section" className="relative w-full max-w-4xl mx-auto py-24 px-6 flex flex-col items-center">
+      <Motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-center mb-10">
+        <h2 className="text-3xl md:text-5xl font-bold mb-4 bg-clip-text text-transparent bg-linear-to-r from-white to-gray-400">Find your next mood</h2>
+        <p className="text-gray-400 text-lg">Choose how you want to feel. Camera based mood detection is optional.</p>
+      </Motion.div>
 
-        <p className="text-gray-400 text-lg">
-          Position your face in the frame and let our neural engine detect your
-          current vibe.
-        </p>
-      </motion.div>
-
-      <div className="relative group">
-        <div
-          className={cn(
-            'absolute -inset-1 bg-linear-to-r from-primary via-secondary to-accent rounded-2xl blur opacity-30 group-hover:opacity-70 transition duration-1000 group-hover:duration-200',
-            isScanning && 'animate-pulse opacity-100 blur-md',
-          )}
-        />
-
-        <div className="relative bg-[#0a0a0a] rounded-2xl p-2 border border-white/10 glass-panel overflow-hidden shadow-2xl">
-          <div className="relative rounded-xl overflow-hidden aspect-video w-[320px] md:w-160 bg-black/50 flex items-center justify-center">
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              className={cn(
-                'w-full h-full object-cover transition-all duration-700',
-                isScanning
-                  ? 'scale-105 brightness-110 saturate-150'
-                  : 'scale-100',
-              )}
-            />
-
-            <AnimatePresence>
-              {isScanning && (
-                <motion.div
-                  initial={{ top: '0%' }}
-                  animate={{ top: '100%' }}
-                  transition={{
-                    duration: 1.5,
-                    repeat: Infinity,
-                    ease: 'linear',
-                  }}
-                  className="absolute left-0 right-0 h-1 bg-secondary shadow-[0_0_20px_#06b6d4] z-10"
-                />
-              )}
-            </AnimatePresence>
-
-            <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-white/30 rounded-tl-lg pointer-events-none" />
-            <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-white/30 rounded-tr-lg pointer-events-none" />
-            <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-white/30 rounded-bl-lg pointer-events-none" />
-            <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-white/30 rounded-br-lg pointer-events-none" />
-
-            {!isModelLoaded && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center z-20">
-                <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
-
-                <span className="text-sm font-mono text-primary animate-pulse tracking-widest">
-                  INITIALIZING NEURAL NETS...
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
+      <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-5 mb-8">
+        <label className="flex flex-col gap-2 text-sm text-gray-300">
+          Mood
+          <select value={selectedMood} onChange={(event) => { scanSequenceRef.current += 1; setIsScanning(false); requestControllerRef.current?.abort(); setSelectedMood(event.target.value); setDetectedMood(''); }} className="rounded-xl bg-white/5 border border-white/15 px-4 py-3 text-white">
+            <option value="" className="bg-[#111]">No mood selected</option>
+            {MOOD_OPTIONS.map((mood) => <option key={mood} value={mood} className="bg-[#111]">{mood[0].toUpperCase() + mood.slice(1)}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-2 text-sm text-gray-300">
+          Listening intention
+          <select value={intention} onChange={(event) => setIntention(event.target.value)} className="rounded-xl bg-white/5 border border-white/15 px-4 py-3 text-white">
+            {LISTENING_INTENTIONS.map(({ value, label }) => <option key={value} value={value} className="bg-[#111]">{label}</option>)}
+          </select>
+        </label>
       </div>
 
-      <div className="mt-10 flex flex-col items-center gap-6">
-        <button
-          onClick={detectMood}
-          disabled={!isModelLoaded || isScanning}
-          className="relative px-8 py-4 rounded-full font-bold text-white transition-all overflow-hidden group disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <div className="absolute inset-0 bg-linear-to-r from-primary to-accent opacity-80 group-hover:opacity-100 transition-opacity" />
-
-          <span className="relative flex items-center gap-3">
-            {isScanning ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Analyzing Face...
-              </>
-            ) : (
-              <>
-                <ScanFace className="w-5 h-5" />
-                Initialize Scan
-              </>
-            )}
-          </span>
+      <div className="flex flex-wrap justify-center gap-3">
+        <button onClick={() => recommend()} disabled={busy} className="relative px-7 py-3 rounded-full font-bold text-white bg-linear-to-r from-primary to-accent disabled:opacity-50">
+          {isLoading ? <span className="flex items-center gap-2"><Loader2 className="w-5 h-5 animate-spin" />Finding tracks…</span> : 'Get recommendations'}
         </button>
-
-        {errorMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-red-400 text-sm font-medium bg-red-400/10 px-4 py-2 rounded-lg border border-red-400/20"
-          >
-            {errorMsg}
-          </motion.div>
+        {!isCameraEnabled && (
+          <button onClick={enableCamera} disabled={isCameraLoading} className="px-6 py-3 rounded-full border border-white/20 text-gray-200 hover:bg-white/5 disabled:opacity-50">
+            <span className="flex items-center gap-2">{isCameraLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}{isCameraLoading ? 'Preparing camera…' : 'Enable camera detection'}</span>
+          </button>
         )}
-
-        <AnimatePresence>
-          {detectedMood && !isScanning && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              className="flex items-center gap-3 glass-panel px-6 py-3 rounded-2xl border border-secondary/30 shadow-[0_0_30px_rgba(6,182,212,0.2)]"
-            >
-              <Sparkles className="w-5 h-5 text-secondary" />
-
-              <div className="flex flex-col">
-                <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
-                  Detected Vibe
-                </span>
-
-                <span className="text-xl font-bold text-white capitalize">
-                  {detectedMood}
-                </span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
+
+      {isCameraEnabled && (
+        <div className="mt-8 flex flex-col items-center gap-4">
+          <video ref={videoRef} autoPlay muted playsInline className={cn('w-[320px] md:w-96 aspect-video object-cover rounded-2xl bg-black/50 border border-white/10', isScanning && 'brightness-110 saturate-150')} />
+          <button onClick={detectMood} disabled={!isModelLoaded || busy} className="px-6 py-3 rounded-full border border-secondary/30 text-secondary disabled:opacity-50">
+            <span className="flex items-center gap-2">{isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <ScanFace className="w-5 h-5" />}{isScanning ? 'Analyzing…' : 'Detect my mood'}</span>
+          </button>
+          <button onClick={disableCamera} className="text-sm text-gray-400 hover:text-white">Turn camera off</button>
+        </div>
+      )}
+
+      {detectedMood && <div className="mt-6 flex items-center gap-2 text-secondary"><Sparkles className="w-5 h-5" />Camera detected {detectedMood}.</div>}
+      {error && <Motion.p role="alert" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-6 text-red-400 text-sm text-center">{error}</Motion.p>}
     </section>
   );
 };
