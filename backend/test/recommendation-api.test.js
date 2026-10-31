@@ -9,9 +9,11 @@ let records = [
   { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', title: 'Bright', artist: 'Bright', mood: 'happy', energy: 'high' },
 ];
 let findError;
+let lastFilter;
 
 const songModel = {
-  find() {
+  find(filter) {
+    lastFilter = filter;
     if (findError) throw findError;
     const query = {
       sort() { return query; },
@@ -54,6 +56,12 @@ test('recommendation API defaults intention, normalizes mood, and returns explai
   assert.equal(body.recommendations.length, 1);
   assert.equal(body.recommendations[0].song.title, 'Low');
   assert.match(body.recommendations[0].reason, /matches the sad mood/);
+  assert.deepEqual(lastFilter, {
+    $or: [{ $and: [
+      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
+      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
+    ] }],
+  });
 });
 
 test('recommendation API accepts omitted mood and rejects invalid intentions and extra fields', async () => {

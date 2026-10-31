@@ -50,14 +50,20 @@ function validateAudioFile(file) {
 }
 
 function validateSongMetadata(body) {
-  const allowedFields = new Set(['title', 'artist', 'mood', 'genre', 'energy', 'tags']);
+  const allowedFields = new Set(['title', 'artist', 'mood', 'genre', 'energy', 'tags', 'visibility']);
   const unexpectedFields = Object.keys(body || {}).filter((key) => !allowedFields.has(key));
   if (unexpectedFields.length > 0) {
-    throw new ApiError(400, 'UNEXPECTED_FIELDS', 'Only title, artist, mood, genre, energy, and tags fields are accepted.');
+    throw new ApiError(400, 'UNEXPECTED_FIELDS', 'Only title, artist, mood, genre, energy, tags, and visibility fields are accepted.');
   }
 
   const limits = { title: 120, artist: 120, mood: 40 };
   const metadata = {};
+  if (body?.visibility !== undefined) {
+    if (!['public', 'private'].includes(body.visibility)) {
+      throw new ApiError(400, 'INVALID_METADATA', 'visibility must be public or private.');
+    }
+    metadata.visibility = body.visibility;
+  }
 
   for (const [field, maxLength] of Object.entries(limits)) {
     const value = body?.[field];

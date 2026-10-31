@@ -193,8 +193,8 @@ function rankSongs(songs, request) {
   return selected;
 }
 
-async function getRecommendations(songModel, request) {
-  const candidates = await songModel.find({})
+async function getRecommendations(songModel, request, visibilityFilter = {}) {
+  const candidates = await songModel.find(visibilityFilter)
     .sort({ createdAt: -1, _id: -1 })
     .limit(CANDIDATE_LIMIT)
     .lean();

@@ -4,6 +4,16 @@ const createApp = require('../src/app').createApp;
 const getCorsOrigins = require('../src/app').getCorsOrigins;
 const getUploadLimitBytes = require('../src/routes/song.routes').getUploadLimitBytes;
 const getImageKitResponseTimeoutMs = require('../src/routes/song.routes').getImageKitResponseTimeoutMs;
+const { createAccessToken } = require('../src/service/token.service');
+const testAuthConfig = { accessTokenSecret: 'test-secret-that-is-at-least-32-bytes-long', accessTokenTtlSeconds: 600, cookie: { refreshName: 'moddy_refresh', csrfName: 'moddy_csrf', path: '/auth', csrfPath: '/', sameSite: 'lax', secure: false }, refreshTtlDays: 30 };
+const adminId = '507f1f77bcf86cd799439011';
+const regularUserId = '507f1f77bcf86cd799439012';
+const testAdmin = { _id: adminId, id: adminId, name: 'Test Admin', email: 'admin@example.test', role: 'admin', status: 'active' };
+const testRegularUser = { _id: regularUserId, id: regularUserId, name: 'Test User', email: 'user@example.test', role: 'user', status: 'active' };
+const testUserModel = { async findById(id) { return String(id) === adminId ? testAdmin : String(id) === regularUserId ? testRegularUser : null; } };
+const adminToken = createAccessToken({ userId: adminId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'admin' }, testAuthConfig);
+const userToken = createAccessToken({ userId: regularUserId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'user' }, testAuthConfig);
+const makeApp = (options = {}) => createApp({ userModel: testUserModel, authConfig: testAuthConfig, ...options });
 
 const validAudio = Buffer.from('RIFF0000WAVE');
 const audioFields = { title: '  Test Song  ', artist: '  Test Artist ', mood: ' happy ' };
@@ -63,7 +73,7 @@ async function sendUpload(baseUrl, fields, file) {
   const multipart = makeMultipart(fields, file);
   return fetch(`${baseUrl}/songs`, {
     method: 'POST',
-    headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}` },
+    headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}`, authorization: `Bearer ${adminToken}` },
     body: multipart.body,
   });
 }
@@ -82,7 +92,7 @@ let server;
 let baseUrl;
 
 before(async () => {
-  app = createApp({
+  app = makeApp({
     songModel: model,
     uploadLimitBytes: 1024,
     uploadFile: async (file, fileName) => {
@@ -112,6 +122,55 @@ test('readiness reports database state', async () => {
   assert.deepEqual(await response.json(), { status: 'ready' });
 });
 
+test('song uploads require an administrator account', async () => {
+  const multipart = makeMultipart();
+  const anonymous = await fetch(`${baseUrl}/songs`, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}` }, body: multipart.body });
+  assert.equal(anonymous.status, 401);
+  const regular = await fetch(`${baseUrl}/songs`, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}`, authorization: `Bearer ${userToken}` }, body: multipart.body });
+  assert.equal(regular.status, 403);
+});
+
+test('catalog approval is admin-only and rejects invalid status transitions', async () => {
+  const songId = '507f1f77bcf86cd799439099';
+  const song = { _id: songId, catalogStatus: 'pending', reviewedBy: null, reviewedAt: null };
+  const reviewModel = {
+    async findById(id) {
+      if (id !== songId) return null;
+      return { ...song, async save() { Object.assign(song, this); return song; } };
+    },
+  };
+  const reviewApp = makeApp({ songModel: reviewModel });
+  const reviewServer = reviewApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => reviewServer.once('listening', resolve));
+  const url = `http://127.0.0.1:${reviewServer.address().port}/admin/songs/${songId}/catalog-status`;
+  try {
+    const denied = await fetch(url, {
+      method: 'PATCH', headers: { authorization: `Bearer ${userToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(denied.status, 403);
+    const invalid = await fetch(url, {
+      method: 'PATCH', headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'published' }),
+    });
+    assert.equal(invalid.status, 400);
+    const approved = await fetch(url, {
+      method: 'PATCH', headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(approved.status, 200);
+    assert.equal(song.catalogStatus, 'approved');
+    const missing = await fetch(`http://127.0.0.1:${reviewServer.address().port}/admin/songs/507f1f77bcf86cd799439098/catalog-status`, {
+      method: 'PATCH', headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(missing.status, 404);
+  } finally {
+    reviewServer.closeAllConnections();
+    await new Promise((resolve, reject) => reviewServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test('upload size configuration defaults to 25 MiB and rejects unreasonable values', () => {
   assert.equal(getUploadLimitBytes(''), 25 * 1024 * 1024);
   assert.equal(getUploadLimitBytes('1048576'), 1024 * 1024);
@@ -127,7 +186,7 @@ test('ImageKit response wait configuration is bounded and defaults to 30 seconds
 });
 
 test('readiness reports unavailable database state as not ready', async () => {
-  const notReadyApp = createApp({ isDatabaseReady: () => false, rateLimitConfig: highTestRateLimits });
+  const notReadyApp = makeApp({ isDatabaseReady: () => false, rateLimitConfig: highTestRateLimits });
   const notReadyServer = notReadyApp.listen(0, '127.0.0.1');
   await new Promise((resolve) => notReadyServer.once('listening', resolve));
   try {
@@ -146,7 +205,7 @@ test('CORS allows the configured frontend and omits access for other browser ori
     'https://player.example.com',
     'https://admin.example.com',
   ]);
-  const corsApp = createApp({
+  const corsApp = makeApp({
     corsOrigins: new Set(['http://localhost:5173']),
     isDatabaseReady: () => true,
     rateLimitConfig: highTestRateLimits,
@@ -173,6 +232,9 @@ test('upload trims required metadata and uses a unique provider filename', async
   assert.equal(body.song.title, 'Test Song');
   assert.equal(body.song.artist, 'Test Artist');
   assert.equal(body.song.mood, 'happy');
+  assert.equal(body.song.visibility, 'public');
+  assert.equal(body.song.catalogStatus, 'pending');
+  assert.equal(model.calls.created.at(-1).uploadedByRole, 'admin');
   assert.match(uploadCalls.at(-1).fileName, /^[0-9a-f-]{36}\.wav$/i);
   assert.equal(model.calls.created.at(-1).storageFileId, 'provider-file-1');
   assert.equal(body.song.fileId, undefined);
@@ -233,7 +295,7 @@ test('upload rejects an unexpected file field', async () => {
   const body = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="cover"; filename="cover.wav"\r\nContent-Type: audio/wav\r\n\r\nRIFF0000WAVE\r\n--${boundary}--\r\n`);
   const response = await fetch(`${baseUrl}/songs`, {
     method: 'POST',
-    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, authorization: `Bearer ${adminToken}` },
     body,
   });
   assert.equal(response.status, 400);
@@ -243,7 +305,7 @@ test('upload rejects an unexpected file field', async () => {
 test('malformed multipart requests return a controlled client error', async () => {
   const response = await fetch(`${baseUrl}/songs`, {
     method: 'POST',
-    headers: { 'content-type': 'multipart/form-data; boundary=unfinished' },
+    headers: { 'content-type': 'multipart/form-data; boundary=unfinished', authorization: `Bearer ${adminToken}` },
     body: '--unfinished\r\nContent-Disposition: form-data; name="title"\r\n',
   });
   assert.equal(response.status, 400);
@@ -265,7 +327,7 @@ test('upload concurrency cap rejects a second in-progress upload before provider
   const providerStarted = new Promise((resolve) => { notifyProviderStarted = resolve; });
   let releaseProvider;
   const providerGate = new Promise((resolve) => { releaseProvider = resolve; });
-  const limitedApp = createApp({
+  const limitedApp = makeApp({
     songModel: model,
     uploadLimitBytes: 1024,
     rateLimitConfig: highTestRateLimits,
@@ -301,7 +363,7 @@ test('upload concurrency cap rejects a second in-progress upload before provider
 });
 
 test('provider failures return a safe error response', async () => {
-  const failingApp = createApp({
+  const failingApp = makeApp({
     songModel: model,
     uploadFile: async () => { throw new Error('provider secret detail'); },
     deleteFile: async () => {},
@@ -324,7 +386,7 @@ test('provider failures return a safe error response', async () => {
 });
 
 test('database create failure attempts to delete the uploaded provider asset', async () => {
-  const failingApp = createApp({
+  const failingApp = makeApp({
     songModel: createSongModel({ createError: new Error('database detail') }),
     uploadFile: async () => ({ fileId: 'orphan-candidate', url: 'https://ik.example.invalid/audio' }),
     deleteFile: async (fileId) => deleteCalls.push(fileId),
@@ -356,7 +418,7 @@ test('upload concurrency slot is released after parse, validation, provider, dat
       return { _id: 'recovered-song', ...data };
     },
   };
-  const failurePathApp = createApp({
+  const failurePathApp = makeApp({
     songModel: failurePathModel,
     uploadLimitBytes: 1024,
     rateLimitConfig: highTestRateLimits,
@@ -376,7 +438,7 @@ test('upload concurrency slot is released after parse, validation, provider, dat
   try {
     const malformed = await fetch(`${failurePathUrl}/songs`, {
       method: 'POST',
-      headers: { 'content-type': 'multipart/form-data; boundary=unfinished' },
+      headers: { 'content-type': 'multipart/form-data; boundary=unfinished', authorization: `Bearer ${adminToken}` },
       body: '--unfinished\r\nContent-Disposition: form-data; name="title"\r\n',
     });
     assert.equal(malformed.status, 400);
@@ -414,7 +476,7 @@ test('provider response timeout keeps the upload slot until late provider comple
   const cleanupGate = new Promise((resolve) => { finishCleanup = resolve; });
   let providerCalls = 0;
   const deleted = [];
-  const timeoutApp = createApp({
+  const timeoutApp = makeApp({
     songModel: model,
     uploadLimitBytes: 1024,
     imageKitResponseTimeoutMs: 10,
@@ -469,7 +531,13 @@ test('song retrieval applies mood filtering and default pagination', async () =>
   const response = await fetch(`${baseUrl}/songs?mood=happy`);
   const body = await response.json();
   assert.equal(response.status, 200);
-  assert.deepEqual(model.calls.filters.at(-1), { mood: 'happy' });
+  assert.deepEqual(model.calls.filters.at(-1), {
+    $or: [{ $and: [
+      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
+      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
+    ] }],
+    mood: 'happy',
+  });
   assert.deepEqual(body.pagination, { page: 1, limit: 50, total: 2, totalPages: 1 });
   assert.equal(body.songs.length, 2);
 });
@@ -478,9 +546,28 @@ test('song retrieval treats a missing or empty mood as an unfiltered catalog que
   const response = await fetch(`${baseUrl}/songs?mood=&page=1&limit=2`);
   const body = await response.json();
   assert.equal(response.status, 200);
-  assert.deepEqual(model.calls.filters.at(-1), {});
+  assert.deepEqual(model.calls.filters.at(-1), {
+    $or: [{ $and: [
+      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
+      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
+    ] }],
+  });
   assert.deepEqual(body.pagination, { page: 1, limit: 2, total: 3, totalPages: 2 });
   assert.equal(body.songs.length, 2);
+});
+
+test('song catalog limits private records to their owner and administrator role', async () => {
+  const response = await fetch(`${baseUrl}/songs`, { headers: { authorization: `Bearer ${userToken}` } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(model.calls.filters.at(-1), {
+    $or: [
+      { $and: [
+        { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
+        { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
+      ] },
+      { ownerId: regularUserId },
+    ],
+  });
 });
 
 test('song retrieval rejects invalid pagination and duplicate mood parameters', async () => {
@@ -493,7 +580,7 @@ test('song retrieval rejects invalid pagination and duplicate mood parameters', 
 });
 
 test('database query failures return a safe common error response', async () => {
-  const queryFailureApp = createApp({
+  const queryFailureApp = makeApp({
     songModel: createSongModel({ findError: new Error('database details must stay private') }),
     isDatabaseReady: () => true,
     rateLimitConfig: highTestRateLimits,
@@ -515,7 +602,7 @@ test('database query failures return a safe common error response', async () => 
 test('malformed JSON uses the common error response shape', async () => {
   const response = await fetch(`${baseUrl}/songs`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
     body: '{',
   });
   const body = await response.json();

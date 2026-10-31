@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const mongoose = require('mongoose');
 const { test } = require('node:test');
 const createApp = require('../src/app').createApp;
+const { createAccessToken } = require('../src/service/token.service');
 const {
   INTEGRATION_DATABASE_NAME,
   PROTECTED_DATABASE_NAMES,
@@ -89,6 +90,15 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     }
 
     let providerFileName;
+    const adminId = new mongoose.Types.ObjectId();
+    const admin = { _id: adminId, id: String(adminId), name: 'Integration Admin', email: 'integration-admin@example.test', role: 'admin', status: 'active' };
+    const authConfig = {
+      accessTokenSecret: crypto.randomBytes(32).toString('base64url'),
+      accessTokenTtlSeconds: 600,
+      refreshTtlDays: 30,
+      cookie: { refreshName: 'moddy_refresh', csrfName: 'moddy_csrf', path: '/auth', csrfPath: '/', sameSite: 'lax', secure: false },
+    };
+    const adminToken = createAccessToken({ userId: admin._id, familyId: crypto.randomUUID(), role: 'admin' }, authConfig);
     const app = createApp({
       songModel: Song,
       feedbackModel: Feedback,
@@ -106,6 +116,8 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
         return { fileId: `integration-${fileName}`, url: `https://ik.example.invalid/${fileName}` };
       },
       deleteFile: async () => {},
+      userModel: { findById: async (id) => String(id) === String(admin._id) ? admin : null },
+      authConfig,
     });
     server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => {
@@ -123,7 +135,7 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     form.set('genre', 'ambient');
     form.set('energy', 'low');
     form.set('audio', new Blob([Buffer.from('RIFF0000WAVE')], { type: 'audio/wav' }), 'integration.wav');
-    const created = await fetch(`${baseUrl}/songs`, { method: 'POST', body: form });
+    const created = await fetch(`${baseUrl}/songs`, { method: 'POST', headers: { authorization: `Bearer ${adminToken}` }, body: form });
     assert.equal(created.status, 201);
     const song = (await created.json()).song;
     assert.equal(song.audio, `https://ik.example.invalid/${providerFileName}`);
@@ -133,6 +145,15 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     assert.equal(storedSong.storageFileId, `integration-${providerFileName}`);
     assert.equal(storedSong.audio, song.audio);
 
+    assert.equal(song.catalogStatus, 'pending');
+    const pendingCatalog = await fetch(`${baseUrl}/songs?page=1&limit=1`);
+    assert.equal((await pendingCatalog.json()).pagination.total, 0);
+    const approved = await fetch(`${baseUrl}/admin/songs/${song._id}/catalog-status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(approved.status, 200);
     const catalog = await fetch(`${baseUrl}/songs?page=1&limit=1`);
     const catalogBody = await catalog.json();
     assert.equal(catalog.status, 200);

@@ -10,6 +10,12 @@ const songSchema = new mongoose.Schema(
     genre: { type: String, trim: true, maxlength: 60 },
     energy: { type: String, enum: ['low', 'medium', 'high'] },
     tags: { type: [{ type: String, trim: true, lowercase: true, maxlength: 30 }], default: undefined },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true, select: false },
+    visibility: { type: String, enum: ['public', 'private'], default: 'private', required: true },
+    catalogStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', required: true },
+    uploadedByRole: { type: String, enum: ['admin', 'user', 'system'], default: 'system', required: true },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, select: false },
+    reviewedAt: { type: Date, default: null, select: false },
   },
   {
     timestamps: true,

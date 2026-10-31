@@ -10,6 +10,7 @@ const defaultFeedbackModel = require('../models/feedback.model');
 const defaultFeedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
 const { getRecommendations, validateRecommendationRequest, normalizeIntention } = require('../service/recommendation.service');
 const { reserveFeedbackSlot } = require('../service/feedback-quota.service');
+const { createAuthenticate, createOptionalAuthenticate, requireRole } = require('../middleware/authentication');
 
 const DEFAULT_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
 const MAX_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
@@ -75,10 +76,31 @@ function createSongRouter({
   imageKitResponseTimeoutMs = getImageKitResponseTimeoutMs(),
   rateLimiters = {},
   onFeedbackDatabaseError,
+  userModel,
+  authConfigProvider,
 } = {}) {
   const uploadFile = configuredUploadFile || ((...args) => require('../service/storage.service')(...args));
   const deleteFile = configuredDeleteFile || ((fileId) => require('../service/storage.service').deleteFile(fileId));
   const router = express.Router();
+  const authenticate = userModel && authConfigProvider
+    ? createAuthenticate({ userModel, configProvider: authConfigProvider })
+    : (req, res, next) => next(new ApiError(503, 'AUTH_UNAVAILABLE', 'Authentication is unavailable.'));
+  const optionalAuthenticate = userModel && authConfigProvider
+    ? createOptionalAuthenticate({ userModel, configProvider: authConfigProvider })
+    : (req, res, next) => next();
+  const requireAdmin = requireRole('admin');
+  function visibleSongFilter(req) {
+    if (req.user?.role === 'admin') return {};
+    const publicCatalog = {
+      $and: [
+        { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
+        { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
+      ],
+    };
+    return {
+      $or: [publicCatalog, ...(req.user ? [{ ownerId: req.auth.userId }] : [])],
+    };
+  }
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
@@ -139,7 +161,7 @@ function createSongRouter({
     }
   }
 
-  router.post('/songs', rateLimiters.upload || ((req, res, next) => next()), limitConcurrentUploads, parseUpload, async (req, res) => {
+  router.post('/songs', authenticate, requireAdmin, rateLimiters.upload || ((req, res, next) => next()), limitConcurrentUploads, parseUpload, async (req, res) => {
     try {
       if (req.aborted || res.destroyed) return;
       const metadata = validateSongMetadata(req.body);
@@ -189,8 +211,12 @@ function createSongRouter({
       try {
         song = await songModel.create({
           ...metadata,
+          visibility: metadata.visibility || 'public',
           audio: uploadedAsset.url,
           storageFileId: uploadedAsset.fileId,
+          ownerId: req.auth.userId,
+          uploadedByRole: 'admin',
+          catalogStatus: 'pending',
         });
       } catch (error) {
         await removeUploadedAsset(uploadedAsset.fileId);
@@ -199,13 +225,28 @@ function createSongRouter({
 
       const songResponse = typeof song?.toObject === 'function' ? song.toObject() : { ...song };
       delete songResponse.storageFileId;
+      delete songResponse.ownerId;
       res.status(201).json({ message: 'Song created successfully', song: songResponse });
     } finally {
       if (!req.deferUploadSlotRelease) req.releaseUploadSlot?.();
     }
   });
 
-  router.get('/songs', rateLimiters.catalog || ((req, res, next) => next()), async (req, res) => {
+  router.patch('/admin/songs/:id/catalog-status', authenticate, requireAdmin, async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !req.body || Array.isArray(req.body) ||
+        Object.keys(req.body).length !== 1 || !['pending', 'approved', 'rejected'].includes(req.body.status)) {
+      throw new ApiError(400, 'INVALID_CATALOG_STATUS', 'Provide a valid catalog status.');
+    }
+    const song = await songModel.findById(req.params.id);
+    if (!song) throw new ApiError(404, 'SONG_NOT_FOUND', 'The song was not found.');
+    song.catalogStatus = req.body.status;
+    song.reviewedBy = req.auth.userId;
+    song.reviewedAt = new Date();
+    await song.save();
+    res.status(200).json({ song: { id: String(song._id), catalogStatus: song.catalogStatus, reviewedAt: song.reviewedAt } });
+  });
+
+  router.get('/songs', optionalAuthenticate, rateLimiters.catalog || ((req, res, next) => next()), async (req, res) => {
     const allowedParameters = new Set(['mood', 'page', 'limit']);
     if (Object.keys(req.query).some((key) => !allowedParameters.has(key))) {
       throw new ApiError(400, 'INVALID_QUERY', 'Only mood, page, and limit query parameters are accepted.');
@@ -222,7 +263,8 @@ function createSongRouter({
 
     const page = parsePositiveInteger(req.query.page, 'page', DEFAULT_PAGE, MAX_PAGE);
     const limit = parsePositiveInteger(req.query.limit, 'limit', DEFAULT_LIMIT, MAX_LIMIT);
-    const filter = mood ? { mood } : {};
+    const visibility = visibleSongFilter(req);
+    const filter = mood ? { ...visibility, mood } : visibility;
     const skip = (page - 1) * limit;
     const [songs, total] = await Promise.all([
       songModel.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
@@ -236,11 +278,12 @@ function createSongRouter({
     });
   });
 
-  router.post('/recommendations', rateLimiters.recommendation || ((req, res, next) => next()), async (req, res) => {
+  router.post('/recommendations', optionalAuthenticate, rateLimiters.recommendation || ((req, res, next) => next()), async (req, res) => {
     const validation = validateRecommendationRequest(req.body);
     if (validation.error) throw new ApiError(400, 'INVALID_RECOMMENDATION_REQUEST', validation.error);
     const request = validation.value;
-    const recommendations = await getRecommendations(songModel, request);
+    const visibility = visibleSongFilter(req);
+    const recommendations = await getRecommendations(songModel, request, visibility);
     res.status(200).json({
       message: 'Recommendations generated successfully',
       recommendations,
@@ -250,7 +293,7 @@ function createSongRouter({
     });
   });
 
-  router.post('/feedback', rateLimiters.feedback || ((req, res, next) => next()), async (req, res) => {
+  router.post('/feedback', optionalAuthenticate, rateLimiters.feedback || ((req, res, next) => next()), async (req, res) => {
     const runFeedbackDatabaseOperation = async (operation, run) => {
       try {
         return await run();
@@ -278,7 +321,8 @@ function createSongRouter({
 
     const sessionId = body.sessionId.toLowerCase();
     const songObjectId = new mongoose.Types.ObjectId(body.songId);
-    const songExists = await runFeedbackDatabaseOperation('songModel.exists', () => songModel.exists({ _id: songObjectId }));
+    const songVisibility = visibleSongFilter(req);
+    const songExists = await runFeedbackDatabaseOperation('songModel.exists', () => songModel.exists({ _id: songObjectId, ...songVisibility }));
     if (!songExists) throw new ApiError(404, 'SONG_NOT_FOUND', 'The song was not found.');
     const quotaExists = await runFeedbackDatabaseOperation('feedbackSessionQuotaModel.exists', () => feedbackSessionQuotaModel.exists({ sessionId }));
     const existingFeedbackCount = quotaExists ? 0 : await runFeedbackDatabaseOperation(

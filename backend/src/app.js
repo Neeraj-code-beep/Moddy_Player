@@ -1,7 +1,14 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const mongoose = require('mongoose');
 const createSongRouter = require('./routes/song.routes');
+const createAuthRouter = require('./routes/auth.routes');
+const createUserRouter = require('./routes/user.routes');
+const User = require('./models/user.model');
+const AuthSession = require('./models/auth-session.model');
+const { createAuthService } = require('./service/auth.service');
+const { getAuthConfig } = require('./config/auth');
 const ApiError = require('./utils/api-error');
 const { createRateLimiters, getRateLimitConfig, InMemoryRateLimitStore } = require('./middleware/rate-limit');
 
@@ -53,10 +60,25 @@ function createApp(options = {}) {
   const allowedOrigins = options.corsOrigins || getCorsOrigins();
   app.use(cors({
     origin(origin, callback) {
-      callback(null, !origin || allowedOrigins.has(origin));
+      callback(null, origin && allowedOrigins.has(origin) ? origin : false);
     },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   }));
   app.use(express.json({ limit: '100kb' }));
+  app.use(cookieParser());
+
+  const userModel = options.userModel || User;
+  const authSessionModel = options.authSessionModel || AuthSession;
+  const configProvider = options.authConfigProvider || (() => options.authConfig || getAuthConfig());
+  const authService = options.authService || createAuthService({
+    userModel,
+    sessionModel: authSessionModel,
+    configProvider,
+    imageKitEndpoint: options.imageKitEndpoint ?? process.env.IMAGEKIT_URL_ENDPOINT,
+    mongo: options.mongo || mongoose,
+  });
 
   app.get('/health', (req, res) => {
     const ready = options.isDatabaseReady
@@ -66,7 +88,14 @@ function createApp(options = {}) {
   });
   app.get('/live', (req, res) => res.status(200).json({ status: 'live' }));
 
-  app.use('/', createSongRouter({ ...options, rateLimiters }));
+  app.use('/auth', createAuthRouter({ authService, userModel, configProvider, allowedOrigins, rateLimiters }));
+  app.use('/users', createUserRouter({ authService, userModel, configProvider, rateLimiters }));
+  app.use('/', createSongRouter({
+    ...options,
+    rateLimiters,
+    userModel,
+    authConfigProvider: configProvider,
+  }));
   app.use((req, res, next) => {
     next(new ApiError(404, 'NOT_FOUND', 'The requested endpoint was not found.'));
   });
