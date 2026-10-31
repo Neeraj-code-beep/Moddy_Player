@@ -62,6 +62,12 @@ export const test = base.extend({
       feedbackResponder: null,
     };
 
+    await page.route((url) => url.pathname === '/auth/refresh', async (route) => route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'AUTH_INVALID_SESSION', message: 'Sign in.' } }),
+    }));
+
     await page.route('**/songs', async (route) => {
       if (route.request().method() !== 'GET') return route.fallback();
       state.requests.push({ method: 'GET', path: '/songs', body: null });

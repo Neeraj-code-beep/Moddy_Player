@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion as Motion } from 'framer-motion';
 import { AudioLines, Menu, X } from 'lucide-react';
+import AuthPanel from '../AuthPanel';
 
 const links = [
   { label: 'Home', href: '#home' },
   { label: 'Discover', href: '#discover' },
 ];
 
-const Navbar = () => {
+const Navbar = ({ user, authLoading, onUserChange }) => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const menuTriggerRef = useRef(null);
 
   useEffect(() => {
@@ -69,6 +71,8 @@ const Navbar = () => {
             {links.map((link) => <a key={link.href} href={link.href} className="rounded py-2 text-sm text-white/65 transition hover:text-white">{link.label}</a>)}
           </div>
 
+          <button type="button" disabled={authLoading} onClick={() => setAccountOpen(true)} className="hidden rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-60 md:block">{authLoading ? 'Checking…' : user ? user.name : 'Sign in'}</button>
+
           <button
             type="button"
             ref={menuTriggerRef}
@@ -106,10 +110,12 @@ const Navbar = () => {
                   {link.label}
                 </a>
               ))}
+              <button type="button" disabled={authLoading} onClick={() => { closeMenu(); setAccountOpen(true); }} className="rounded-full border border-white/20 px-5 py-3 text-white disabled:opacity-60">{authLoading ? 'Checking…' : user ? 'Your account' : 'Sign in'}</button>
             </nav>
           </Motion.div>
         )}
       </AnimatePresence>
+      {accountOpen && <AuthPanel user={user} onUserChange={onUserChange} onClose={() => setAccountOpen(false)} />}
     </>
   );
 };

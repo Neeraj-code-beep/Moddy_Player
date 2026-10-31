@@ -73,7 +73,7 @@ test('mobile navigation opens as a dialog, traps focus, closes on Escape, and re
   const closeButton = page.getByRole('button', { name: 'Close navigation menu' });
   await expect(closeButton).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(page.getByRole('link', { name: 'Discover' }).last()).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Sign in' }).last()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
