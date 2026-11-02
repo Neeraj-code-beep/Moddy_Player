@@ -39,6 +39,7 @@ function createSongModel({ records = [], createError, findError, countError } = 
       if (findError) throw findError;
       calls.filters.push(filter);
       const query = { offset: 0, limitValue: records.length };
+      query.select = () => query;
       query.sort = () => query;
       query.skip = (value) => { query.offset = value; return query; };
       query.limit = (value) => { query.limitValue = value; return query; };
@@ -102,6 +103,7 @@ before(async () => {
     deleteFile: async (fileId) => deleteCalls.push(fileId),
     isDatabaseReady: () => true,
     rateLimitConfig: highTestRateLimits,
+    getDeliveryUrl: async (url) => `${url}?signed=true`,
   });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
@@ -132,10 +134,10 @@ test('song uploads require an administrator account', async () => {
 
 test('catalog approval is admin-only and rejects invalid status transitions', async () => {
   const songId = '507f1f77bcf86cd799439099';
-  const song = { _id: songId, catalogStatus: 'pending', reviewedBy: null, reviewedAt: null };
+  const song = { _id: songId, uploadSource: 'admin', visibility: 'public', catalogStatus: 'pending', reviewedBy: null, reviewedAt: null };
   const reviewModel = {
-    async findById(id) {
-      if (id !== songId) return null;
+    async findOne(filter) {
+      if (filter._id !== songId || filter.uploadSource !== 'admin' || filter.visibility !== 'public') return null;
       return { ...song, async save() { Object.assign(song, this); return song; } };
     },
   };
@@ -165,6 +167,11 @@ test('catalog approval is admin-only and rejects invalid status transitions', as
       body: JSON.stringify({ status: 'approved' }),
     });
     assert.equal(missing.status, 404);
+    const privateSubmission = await fetch(`http://127.0.0.1:${reviewServer.address().port}/admin/songs/507f1f77bcf86cd799439097/catalog-status`, {
+      method: 'PATCH', headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(privateSubmission.status, 404);
   } finally {
     reviewServer.closeAllConnections();
     await new Promise((resolve, reject) => reviewServer.close((error) => error ? reject(error) : resolve()));
@@ -235,6 +242,8 @@ test('upload trims required metadata and uses a unique provider filename', async
   assert.equal(body.song.visibility, 'public');
   assert.equal(body.song.catalogStatus, 'pending');
   assert.equal(model.calls.created.at(-1).uploadedByRole, 'admin');
+  assert.equal(model.calls.created.at(-1).uploadSource, 'admin');
+  assert.equal(String(model.calls.created.at(-1).uploadedBy), adminId);
   assert.match(uploadCalls.at(-1).fileName, /^[0-9a-f-]{36}\.wav$/i);
   assert.equal(model.calls.created.at(-1).storageFileId, 'provider-file-1');
   assert.equal(body.song.fileId, undefined);
@@ -262,6 +271,13 @@ test('upload rejects whitespace-only metadata before provider upload', async () 
 
   assert.equal(response.status, 400);
   assert.equal(body.error.code, 'INVALID_METADATA');
+  assert.equal(uploadCalls.length, callsBefore);
+});
+
+test('catalog upload does not accept client-controlled visibility', async () => {
+  const callsBefore = uploadCalls.length;
+  const response = await sendUpload(baseUrl, { ...audioFields, visibility: 'private' });
+  assert.equal(response.status, 400);
   assert.equal(uploadCalls.length, callsBefore);
 });
 
@@ -531,13 +547,9 @@ test('song retrieval applies mood filtering and default pagination', async () =>
   const response = await fetch(`${baseUrl}/songs?mood=happy`);
   const body = await response.json();
   assert.equal(response.status, 200);
-  assert.deepEqual(model.calls.filters.at(-1), {
-    $or: [{ $and: [
-      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
-      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
-    ] }],
-    mood: 'happy',
-  });
+  const filter = model.calls.filters.at(-1);
+  assert.equal(filter.mood, 'happy');
+  assert.equal(filter.$and.length, 4);
   assert.deepEqual(body.pagination, { page: 1, limit: 50, total: 2, totalPages: 1 });
   assert.equal(body.songs.length, 2);
 });
@@ -546,28 +558,73 @@ test('song retrieval treats a missing or empty mood as an unfiltered catalog que
   const response = await fetch(`${baseUrl}/songs?mood=&page=1&limit=2`);
   const body = await response.json();
   assert.equal(response.status, 200);
-  assert.deepEqual(model.calls.filters.at(-1), {
-    $or: [{ $and: [
-      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
-      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
-    ] }],
-  });
+  const filter = model.calls.filters.at(-1);
+  assert.equal(filter.mood, undefined);
+  assert.equal(filter.$and.length, 4);
   assert.deepEqual(body.pagination, { page: 1, limit: 2, total: 3, totalPages: 2 });
   assert.equal(body.songs.length, 2);
 });
 
-test('song catalog limits private records to their owner and administrator role', async () => {
-  const response = await fetch(`${baseUrl}/songs`, { headers: { authorization: `Bearer ${userToken}` } });
-  assert.equal(response.status, 200);
-  assert.deepEqual(model.calls.filters.at(-1), {
-    $or: [
-      { $and: [
-        { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
-        { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
-      ] },
-      { ownerId: regularUserId },
-    ],
+test('public catalog excludes private uploads for regular users and administrators', async () => {
+  for (const token of [userToken, adminToken]) {
+    const response = await fetch(`${baseUrl}/songs`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200);
+    const filter = model.calls.filters.at(-1);
+    assert.equal(filter.$and.length, 4);
+    assert.equal(filter.visibility, undefined);
+    assert.equal(filter.ownerId, undefined);
+  }
+});
+
+test('personal uploads are private and use the authenticated owner identity', async () => {
+  const multipart = makeMultipart();
+  const response = await fetch(`${baseUrl}/library/songs`, {
+    method: 'POST',
+    headers: { 'content-type': `multipart/form-data; boundary=${multipart.boundary}`, authorization: `Bearer ${userToken}` },
+    body: multipart.body,
   });
+  const body = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal(model.calls.created.at(-1).visibility, 'private');
+  assert.equal(model.calls.created.at(-1).uploadSource, 'user');
+  assert.equal(String(model.calls.created.at(-1).uploadedBy), regularUserId);
+  assert.equal(body.song.storageFileId, undefined);
+  assert.equal(body.song.uploadedBy, undefined);
+});
+
+test('personal library queries are scoped to the authenticated user and sign private media URLs', async () => {
+  const ownerSong = { _id: '507f1f77bcf86cd799439101', uploadedBy: regularUserId, ownerId: regularUserId, title: 'My track', artist: 'Me', mood: 'calm', audio: 'https://media.example.test/private-a', visibility: 'private', uploadSource: 'user', mediaStatus: 'active' };
+  const otherSong = { _id: '507f1f77bcf86cd799439102', uploadedBy: adminId, ownerId: adminId, title: 'Other track', artist: 'Other', mood: 'calm', audio: 'https://media.example.test/private-b', visibility: 'private', uploadSource: 'user', mediaStatus: 'active' };
+  let observedFilter;
+  const libraryModel = {
+    find(filter) {
+      observedFilter = filter;
+      const query = { select: () => query, sort: () => query, skip: () => query, limit: () => query, lean: async () => [ownerSong, otherSong].filter((song) =>
+        song.visibility === filter.$and[0].visibility && song.uploadSource === filter.$and[0].uploadSource &&
+        (Array.isArray(filter.$and[0].mediaStatus.$in) ? filter.$and[0].mediaStatus.$in.includes(song.mediaStatus) : song.mediaStatus === filter.$and[0].mediaStatus) && filter.$and[0].$or.some((owner) =>
+          String(song.uploadedBy) === String(owner.uploadedBy || '') || String(song.ownerId) === String(owner.ownerId || '')),
+      ) };
+      return query;
+    },
+    async countDocuments() { return 1; },
+  };
+  const libraryApp = makeApp({ songModel: libraryModel, getDeliveryUrl: async (url) => `${url}?signed=short-lived` });
+  const libraryServer = libraryApp.listen(0, '127.0.0.1');
+  await new Promise((resolve) => libraryServer.once('listening', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${libraryServer.address().port}/library/songs`, { headers: { authorization: `Bearer ${userToken}` } });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.songs.length, 1);
+    assert.equal(body.songs[0].title, 'My track');
+    assert.equal(body.songs[0].audio, `${ownerSong.audio}?signed=short-lived`);
+    assert.equal(body.songs[0].uploadedBy, undefined);
+    assert.equal(body.songs[0].ownerId, undefined);
+    assert.deepEqual(observedFilter.$and[0].$or, [{ uploadedBy: regularUserId }, { ownerId: regularUserId }]);
+  } finally {
+    libraryServer.closeAllConnections();
+    await new Promise((resolve, reject) => libraryServer.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('song retrieval rejects invalid pagination and duplicate mood parameters', async () => {

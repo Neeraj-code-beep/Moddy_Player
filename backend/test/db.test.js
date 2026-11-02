@@ -6,6 +6,8 @@ const feedbackSessionQuotaModel = require('../src/models/feedback-session-quota.
 const User = require('../src/models/user.model');
 const AuthSession = require('../src/models/auth-session.model');
 const Song = require('../src/models/song.model');
+const Favorite = require('../src/models/favorite.model');
+const Playlist = require('../src/models/playlist.model');
 
 const originalMongoUrl = process.env.MONGODB_URL;
 const originalTimeout = process.env.MONGODB_CONNECT_TIMEOUT_MS;
@@ -32,14 +34,14 @@ test('database connection uses the configured timeout and resolves only after co
     connectOptions = options;
     return mongoose;
   });
-  for (const model of [feedbackSessionQuotaModel, User, AuthSession, Song]) {
+  for (const model of [feedbackSessionQuotaModel, User, AuthSession, Song, Favorite, Playlist]) {
     mock.method(model, 'createIndexes', async () => { indexedModels.add(model.modelName); });
   }
   mock.method(console, 'log', () => {});
 
   await connectToDB();
   assert.deepEqual(connectOptions, { serverSelectionTimeoutMS: 2500 });
-  assert.deepEqual([...indexedModels].sort(), ['AuthSession', 'FeedbackSessionQuota', 'Song', 'User']);
+  assert.deepEqual([...indexedModels].sort(), ['AuthSession', 'Favorite', 'FeedbackSessionQuota', 'Playlist', 'Song', 'User']);
 });
 
 test('database connection failures are propagated to startup', async () => {

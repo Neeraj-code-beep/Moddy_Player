@@ -3,8 +3,10 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const mongoose = require('mongoose');
 const createSongRouter = require('./routes/song.routes');
+const { getUploadLimitBytes, getImageKitResponseTimeoutMs } = createSongRouter;
 const createAuthRouter = require('./routes/auth.routes');
 const createUserRouter = require('./routes/user.routes');
+const createMusicManagementRouter = require('./routes/music-management.routes');
 const User = require('./models/user.model');
 const AuthSession = require('./models/auth-session.model');
 const { createAuthService } = require('./service/auth.service');
@@ -63,7 +65,7 @@ function createApp(options = {}) {
       callback(null, origin && allowedOrigins.has(origin) ? origin : false);
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   }));
   app.use(express.json({ limit: '100kb' }));
@@ -93,6 +95,16 @@ function createApp(options = {}) {
   app.use('/', createSongRouter({
     ...options,
     rateLimiters,
+    uploadLimitBytes: options.uploadLimitBytes ?? getUploadLimitBytes(),
+    imageKitResponseTimeoutMs: options.imageKitResponseTimeoutMs ?? getImageKitResponseTimeoutMs(),
+    userModel,
+    authConfigProvider: configProvider,
+  }));
+  app.use('/library', createMusicManagementRouter({
+    ...options,
+    rateLimiters,
+    uploadLimitBytes: options.uploadLimitBytes ?? getUploadLimitBytes(),
+    imageKitResponseTimeoutMs: options.imageKitResponseTimeoutMs ?? getImageKitResponseTimeoutMs(),
     userModel,
     authConfigProvider: configProvider,
   }));

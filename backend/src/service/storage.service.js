@@ -7,13 +7,14 @@ const imagekit = new ImageKit({
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
 });
 
-function uploadFile(file, fileName = file.originalname) {
+function uploadFile(file, fileName = file.originalname, options = {}) {
   return new Promise((resolve, reject) => {
     imagekit.upload(
       {
         file: file.buffer.toString('base64'),
         fileName,
         folder: 'songs',
+        ...(options.isPrivateFile ? { isPrivateFile: true } : {}),
       },
       (error, result) => {
         if (error) {
@@ -27,6 +28,7 @@ function uploadFile(file, fileName = file.originalname) {
 }
 
 uploadFile.deleteFile = (fileId) => imagekit.deleteFile(fileId);
+uploadFile.getDeliveryUrl = (url) => imagekit.url({ src: url, signed: true, expireSeconds: 900 });
 
 module.exports = uploadFile;
 // const uploadFile = async (file) => {

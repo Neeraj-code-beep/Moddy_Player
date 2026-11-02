@@ -56,12 +56,14 @@ test('recommendation API defaults intention, normalizes mood, and returns explai
   assert.equal(body.recommendations.length, 1);
   assert.equal(body.recommendations[0].song.title, 'Low');
   assert.match(body.recommendations[0].reason, /matches the sad mood/);
-  assert.deepEqual(lastFilter, {
-    $or: [{ $and: [
-      { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
-      { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
-    ] }],
-  });
+  assert.equal(lastFilter.$and.length, 4);
+  assert.equal(lastFilter.$and[0].$or[0].visibility, 'public');
+  assert.equal(lastFilter.$and[1].$or[0].catalogStatus, 'approved');
+  assert.deepEqual(lastFilter.$and[2].$or[0].uploadSource.$in, ['admin', 'legacy']);
+  assert.equal(lastFilter.$and[3].$or[0].mediaStatus, 'active');
+  const legacyGate = lastFilter.$and[0].$or[1];
+  assert.equal(legacyGate.ownerId.$exists, false);
+  assert.equal(legacyGate.uploadedBy.$exists, false);
 });
 
 test('recommendation API accepts omitted mood and rejects invalid intentions and extra fields', async () => {

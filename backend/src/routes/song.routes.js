@@ -8,8 +8,11 @@ const { validateAudioDeclaration, validateAudioFile, validateSongMetadata } = re
 const defaultSongModel = require('../models/song.model');
 const defaultFeedbackModel = require('../models/feedback.model');
 const defaultFeedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
+const favoriteModel = require('../models/favorite.model');
+const playlistModel = require('../models/playlist.model');
 const { getRecommendations, validateRecommendationRequest, normalizeIntention } = require('../service/recommendation.service');
 const { reserveFeedbackSlot } = require('../service/feedback-quota.service');
+const { publicCatalogFilter } = require('../service/song-access.service');
 const { createAuthenticate, createOptionalAuthenticate, requireRole } = require('../middleware/authentication');
 
 const DEFAULT_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
@@ -89,17 +92,8 @@ function createSongRouter({
     ? createOptionalAuthenticate({ userModel, configProvider: authConfigProvider })
     : (req, res, next) => next();
   const requireAdmin = requireRole('admin');
-  function visibleSongFilter(req) {
-    if (req.user?.role === 'admin') return {};
-    const publicCatalog = {
-      $and: [
-        { $or: [{ visibility: 'public' }, { visibility: { $exists: false } }] },
-        { $or: [{ catalogStatus: 'approved' }, { catalogStatus: { $exists: false } }] },
-      ],
-    };
-    return {
-      $or: [publicCatalog, ...(req.user ? [{ ownerId: req.auth.userId }] : [])],
-    };
+  function visibleSongFilter() {
+    return publicCatalogFilter();
   }
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -167,6 +161,20 @@ function createSongRouter({
       const metadata = validateSongMetadata(req.body);
       if (!req.file) throw new ApiError(400, 'AUDIO_REQUIRED', 'An audio file in the audio field is required.');
       validateAudioFile(req.file);
+      const fingerprint = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+      if (typeof songModel.findOne === 'function') {
+        const existing = await songModel.findOne({ uploadedBy: req.auth.userId, uploadSource: 'admin', uploadFingerprint: fingerprint })
+          .select('+storageFileId +uploadedBy +ownerId');
+        if (existing) {
+          const existingResponse = existing.toObject?.() || { ...existing };
+          delete existingResponse.storageFileId;
+          delete existingResponse.uploadedBy;
+          delete existingResponse.ownerId;
+          delete existingResponse.uploadedByRole;
+          delete existingResponse.uploadFingerprint;
+          return res.status(200).json({ message: 'This catalog upload already exists.', song: existingResponse });
+        }
+      }
 
       const extension = path.extname(req.file.originalname).toLowerCase();
       const providerFileName = `${crypto.randomUUID()}${extension}`;
@@ -211,21 +219,45 @@ function createSongRouter({
       try {
         song = await songModel.create({
           ...metadata,
-          visibility: metadata.visibility || 'public',
+          visibility: 'public',
           audio: uploadedAsset.url,
           storageFileId: uploadedAsset.fileId,
           ownerId: req.auth.userId,
+          uploadedBy: req.auth.userId,
           uploadedByRole: 'admin',
+          uploadSource: 'admin',
           catalogStatus: 'pending',
+          uploadFingerprint: fingerprint,
         });
       } catch (error) {
         await removeUploadedAsset(uploadedAsset.fileId);
+        if (error?.code === 11000 && typeof songModel.findOne === 'function') {
+          const existing = await songModel.findOne({ uploadedBy: req.auth.userId, uploadSource: 'admin', uploadFingerprint: fingerprint })
+            .select('+storageFileId +uploadedBy +ownerId');
+          if (existing) {
+            const existingResponse = existing.toObject?.() || { ...existing };
+            delete existingResponse.storageFileId;
+            delete existingResponse.uploadedBy;
+            delete existingResponse.ownerId;
+            delete existingResponse.uploadedByRole;
+            delete existingResponse.uploadFingerprint;
+            return res.status(200).json({ message: 'This catalog upload already exists.', song: existingResponse });
+          }
+        }
         throw new ApiError(500, 'SONG_SAVE_FAILED', 'The song could not be saved.', error);
       }
 
       const songResponse = typeof song?.toObject === 'function' ? song.toObject() : { ...song };
       delete songResponse.storageFileId;
       delete songResponse.ownerId;
+      delete songResponse.uploadedBy;
+      delete songResponse.aiSuggestions;
+      delete songResponse.metadataProvenance;
+      delete songResponse.uploadedByRole;
+      delete songResponse.uploadSource;
+      delete songResponse.uploadFingerprint;
+      delete songResponse.mediaStatus;
+      delete songResponse.mediaDeletedAt;
       res.status(201).json({ message: 'Song created successfully', song: songResponse });
     } finally {
       if (!req.deferUploadSlotRelease) req.releaseUploadSlot?.();
@@ -237,12 +269,16 @@ function createSongRouter({
         Object.keys(req.body).length !== 1 || !['pending', 'approved', 'rejected'].includes(req.body.status)) {
       throw new ApiError(400, 'INVALID_CATALOG_STATUS', 'Provide a valid catalog status.');
     }
-    const song = await songModel.findById(req.params.id);
+    const song = await songModel.findOne({ _id: req.params.id, uploadSource: 'admin', visibility: 'public' });
     if (!song) throw new ApiError(404, 'SONG_NOT_FOUND', 'The song was not found.');
     song.catalogStatus = req.body.status;
     song.reviewedBy = req.auth.userId;
     song.reviewedAt = new Date();
     await song.save();
+    if (song.catalogStatus !== 'approved') {
+      await favoriteModel.deleteMany({ songId: song._id });
+      await playlistModel.updateMany({ songIds: song._id }, { $pull: { songIds: song._id }, $inc: { revision: 1 } });
+    }
     res.status(200).json({ song: { id: String(song._id), catalogStatus: song.catalogStatus, reviewedAt: song.reviewedAt } });
   });
 
