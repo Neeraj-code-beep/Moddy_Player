@@ -9,6 +9,7 @@ import BottomPlayer from './components/player/BottomPlayer';
 import { fetchRecommendations, sendFeedback } from './api/api';
 import { useAuth } from './auth/AuthContext';
 import { getAdjacentSongIndex } from './lib/playback-navigation';
+import MusicLibrary from './components/MusicLibrary';
 
 const App = () => {
   const [recommendationResult, setRecommendationResult] = useState(null);
@@ -146,6 +147,7 @@ const App = () => {
             />
           )}
         </AnimatePresence>
+        <MusicLibrary user={user} onPlaySong={handlePlaySong} />
       </main>
       <AnimatePresence>
         {currentSong && (
