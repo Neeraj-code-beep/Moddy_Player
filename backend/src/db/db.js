@@ -1,10 +1,12 @@
 const mongoose = require('mongoose');
 const feedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
+const Feedback = require('../models/feedback.model');
 const User = require('../models/user.model');
 const AuthSession = require('../models/auth-session.model');
 const Song = require('../models/song.model');
 const Favorite = require('../models/favorite.model');
 const Playlist = require('../models/playlist.model');
+const SongAnalysisJob = require('../models/song-analysis-job.model');
 
 function getConnectionTimeoutMs(value = process.env.MONGODB_CONNECT_TIMEOUT_MS) {
   if (value === undefined || value === '') return 10_000;
@@ -28,7 +30,7 @@ async function connectToDB() {
     });
     // These unique and TTL indexes are security and quota invariants. Do not
     // start serving requests if MongoDB cannot create them.
-    await Promise.all([feedbackSessionQuotaModel, User, AuthSession, Song, Favorite, Playlist].map((model) => model.createIndexes()));
+    await Promise.all([feedbackSessionQuotaModel, Feedback, User, AuthSession, Song, Favorite, Playlist, SongAnalysisJob].map((model) => model.createIndexes()));
     console.log('Connected to MongoDB');
   } catch (error) {
     console.error('MongoDB startup preparation failed', { errorName: error?.name || 'Error' });

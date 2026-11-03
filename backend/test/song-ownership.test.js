@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const Song = require('../src/models/song.model');
 const Favorite = require('../src/models/favorite.model');
 const Playlist = require('../src/models/playlist.model');
+const SongAnalysisJob = require('../src/models/song-analysis-job.model');
 const { accessibleSongFilter, ownedPrivateSongFilter, publicCatalogFilter } = require('../src/service/song-access.service');
 
 test('song ownership and catalog metadata have constrained values and private projections', async () => {
@@ -15,6 +16,8 @@ test('song ownership and catalog metadata have constrained values and private pr
   assert.equal(Song.schema.path('storageFileId').options.select, false);
   assert.equal(Song.schema.path('aiSuggestions').options.select, false);
   assert.equal(Song.schema.path('metadataProvenance').options.select, false);
+  assert.equal(Song.schema.path('analysis').options.select, false);
+  assert.equal(Song.schema.path('metadataRevision').options.select, false);
 
   song.uploadSource = 'other';
   await assert.rejects(song.validate(), /uploadSource/);
@@ -22,6 +25,16 @@ test('song ownership and catalog metadata have constrained values and private pr
   song.visibility = 'public';
   song.catalogStatus = 'pending';
   await assert.rejects(song.validate(), /visibility|catalogStatus/);
+});
+
+test('song analysis jobs are unique per song and support bounded leases and attempts', async () => {
+  assert.ok(SongAnalysisJob.schema.indexes().some(([keys, options]) => keys.songId === 1 && options.unique));
+  assert.ok(SongAnalysisJob.schema.indexes().some(([keys]) => keys.status === 1 && keys.availableAt === 1));
+  assert.ok(SongAnalysisJob.schema.indexes().some(([keys]) => keys.status === 1 && keys.leaseUntil === 1));
+  const job = new SongAnalysisJob({ songId: '507f1f77bcf86cd799439011', metadataRevision: 0, maxAttempts: 3, model: 'gemini-test' });
+  await job.validate();
+  job.maxAttempts = 11;
+  await assert.rejects(job.validate(), /maxAttempts/);
 });
 
 test('favorite and playlist models bound duplicate references and index user lookups', async () => {

@@ -1,6 +1,7 @@
 {
   "scripts": {
     "start": "node server.js",
+    "worker:music-ai": "node src/workers/music-analysis.worker.js",
     "admin:provision": "node scripts/provision-admin.js",
     "test": "node --test"
   },

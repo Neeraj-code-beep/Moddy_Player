@@ -103,4 +103,14 @@ function validateSongMetadata(body) {
   return metadata;
 }
 
-module.exports = { validateAudioDeclaration, validateAudioFile, validateSongMetadata };
+function getGeminiAudioMimeType(file) {
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  const mimeTypes = {
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+    '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/opus',
+    '.m4a': 'audio/m4a', '.mp4': 'audio/m4a', '.aac': 'audio/aac', '.webm': 'audio/webm',
+  };
+  return mimeTypes[extension] || null;
+}
+
+module.exports = { getGeminiAudioMimeType, validateAudioDeclaration, validateAudioFile, validateSongMetadata };
