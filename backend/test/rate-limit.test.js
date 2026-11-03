@@ -178,6 +178,7 @@ test('rate limit environment configuration is bounded and the memory store prune
     feedback: 30,
     recommendation: 60,
     catalog: 120,
+    analysis: 10,
     register: 5,
     login: 10,
     refresh: 30,

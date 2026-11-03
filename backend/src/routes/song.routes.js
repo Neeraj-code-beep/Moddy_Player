@@ -4,15 +4,17 @@ const express = require('express');
 const multer = require('multer');
 const mongoose = require('mongoose');
 const ApiError = require('../utils/api-error');
-const { validateAudioDeclaration, validateAudioFile, validateSongMetadata } = require('../utils/audio-validation');
+const { getGeminiAudioMimeType, validateAudioDeclaration, validateAudioFile, validateSongMetadata } = require('../utils/audio-validation');
 const defaultSongModel = require('../models/song.model');
 const defaultFeedbackModel = require('../models/feedback.model');
 const defaultFeedbackSessionQuotaModel = require('../models/feedback-session-quota.model');
-const favoriteModel = require('../models/favorite.model');
+const defaultFavoriteModel = require('../models/favorite.model');
 const playlistModel = require('../models/playlist.model');
-const { getRecommendations, validateRecommendationRequest, normalizeIntention } = require('../service/recommendation.service');
+const defaultAnalysisJobModel = require('../models/song-analysis-job.model');
+const { enqueueSongAnalysis } = require('../service/song-analysis-queue.service');
+const { buildUserPreferenceProfile, getRecommendations, validateRecommendationRequest, normalizeIntention } = require('../service/recommendation.service');
 const { reserveFeedbackSlot } = require('../service/feedback-quota.service');
-const { publicCatalogFilter } = require('../service/song-access.service');
+const { accessibleSongFilter, publicCatalogFilter } = require('../service/song-access.service');
 const { createAuthenticate, createOptionalAuthenticate, requireRole } = require('../middleware/authentication');
 
 const DEFAULT_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
@@ -73,6 +75,9 @@ function createSongRouter({
   songModel = defaultSongModel,
   feedbackModel = defaultFeedbackModel,
   feedbackSessionQuotaModel = defaultFeedbackSessionQuotaModel,
+  favoriteModel = defaultFavoriteModel,
+  analysisJobModel = defaultAnalysisJobModel,
+  enqueueAnalysis = enqueueSongAnalysis,
   uploadFile: configuredUploadFile,
   deleteFile: configuredDeleteFile,
   uploadLimitBytes = getUploadLimitBytes(),
@@ -221,6 +226,7 @@ function createSongRouter({
           ...metadata,
           visibility: 'public',
           audio: uploadedAsset.url,
+          audioMimeType: getGeminiAudioMimeType(req.file),
           storageFileId: uploadedAsset.fileId,
           ownerId: req.auth.userId,
           uploadedBy: req.auth.userId,
@@ -247,6 +253,22 @@ function createSongRouter({
         throw new ApiError(500, 'SONG_SAVE_FAILED', 'The song could not be saved.', error);
       }
 
+      try {
+        const queued = await enqueueAnalysis(song, { songModel, jobModel: analysisJobModel });
+        if (queued.queued) {
+          song.analysis = { status: 'queued', jobId: queued.job?._id, requestedAt: queued.job?.createdAt || new Date() };
+          song.aiSuggestions = { status: 'queued' };
+        }
+      } catch (error) {
+        await songModel.updateOne({ _id: song._id }, { $set: {
+          'analysis.status': 'failed', 'analysis.errorCode': 'queue_unavailable',
+          'aiSuggestions.status': 'failed',
+        } }).catch(() => {});
+        song.analysis = { ...song.analysis, status: 'failed', errorCode: 'queue_unavailable' };
+        song.aiSuggestions = { ...song.aiSuggestions, status: 'failed' };
+        console.error('[songs] Music analysis queue failed', { errorName: error?.name || 'Error', code: /^[a-z0-9_]{1,60}$/.test(String(error?.code || '')) ? error.code : 'analysis_queue_failed' });
+      }
+
       const songResponse = typeof song?.toObject === 'function' ? song.toObject() : { ...song };
       delete songResponse.storageFileId;
       delete songResponse.ownerId;
@@ -256,6 +278,9 @@ function createSongRouter({
       delete songResponse.uploadedByRole;
       delete songResponse.uploadSource;
       delete songResponse.uploadFingerprint;
+      delete songResponse.audioMimeType;
+      delete songResponse.analysis;
+      delete songResponse.metadataRevision;
       delete songResponse.mediaStatus;
       delete songResponse.mediaDeletedAt;
       res.status(201).json({ message: 'Song created successfully', song: songResponse });
@@ -319,7 +344,21 @@ function createSongRouter({
     if (validation.error) throw new ApiError(400, 'INVALID_RECOMMENDATION_REQUEST', validation.error);
     const request = validation.value;
     const visibility = visibleSongFilter(req);
-    const recommendations = await getRecommendations(songModel, request, visibility);
+    let preferences = null;
+    if (req.auth?.userId) {
+      const [favorites, feedback] = await Promise.all([
+        favoriteModel.find({ userId: req.auth.userId }).select('songId').lean(),
+        feedbackModel.find({ userId: req.auth.userId }).select('songId event createdAt').sort({ createdAt: -1 }).limit(100).lean(),
+      ]);
+      const ids = [...new Set([...favorites.map(({ songId }) => String(songId)), ...feedback.map(({ songId }) => String(songId))])];
+      const preferenceSongs = ids.length ? await songModel.find(accessibleSongFilter(req.auth.userId, ids)).select('mood secondaryMoods genre energy tags listeningContexts').lean() : [];
+      const songById = new Map(preferenceSongs.map((song) => [String(song._id), song]));
+      preferences = buildUserPreferenceProfile({
+        favorites: favorites.map(({ songId }) => songById.get(String(songId))).filter(Boolean),
+        feedback: feedback.map((event) => ({ ...event, ...(songById.get(String(event.songId)) || {}) })),
+      });
+    }
+    const recommendations = await getRecommendations(songModel, request, visibility, preferences);
     res.status(200).json({
       message: 'Recommendations generated successfully',
       recommendations,
@@ -374,6 +413,7 @@ function createSongRouter({
     }
     await runFeedbackDatabaseOperation('feedbackModel.create', () => feedbackModel.create({
       sessionId,
+      ...(req.auth?.userId ? { userId: new mongoose.Types.ObjectId(req.auth.userId) } : {}),
       songId: songObjectId,
       event: body.event,
       intention,

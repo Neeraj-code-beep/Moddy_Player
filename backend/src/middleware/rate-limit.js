@@ -21,6 +21,7 @@ function getRateLimitConfig(env = process.env) {
     feedback: readInteger(env.RATE_LIMIT_FEEDBACK_MAX, 'RATE_LIMIT_FEEDBACK_MAX', 30, 1, 100_000),
     recommendation: readInteger(env.RATE_LIMIT_RECOMMENDATION_MAX, 'RATE_LIMIT_RECOMMENDATION_MAX', 60, 1, 100_000),
     catalog: readInteger(env.RATE_LIMIT_CATALOG_MAX, 'RATE_LIMIT_CATALOG_MAX', 120, 1, 100_000),
+    analysis: readInteger(env.RATE_LIMIT_ANALYSIS_MAX, 'RATE_LIMIT_ANALYSIS_MAX', 10, 1, 10_000),
     register: readInteger(env.RATE_LIMIT_REGISTER_MAX, 'RATE_LIMIT_REGISTER_MAX', 5, 1, 10_000),
     login: readInteger(env.RATE_LIMIT_LOGIN_MAX, 'RATE_LIMIT_LOGIN_MAX', 10, 1, 10_000),
     refresh: readInteger(env.RATE_LIMIT_REFRESH_MAX, 'RATE_LIMIT_REFRESH_MAX', 30, 1, 100_000),
@@ -90,7 +91,7 @@ function createRateLimiter({ name, limit, windowMs, store }) {
 
 function createRateLimiters({ config = getRateLimitConfig(), store = new InMemoryRateLimitStore() } = {}) {
   const defaults = getRateLimitConfig({});
-  return Object.fromEntries(['upload', 'feedback', 'recommendation', 'catalog', 'register', 'login', 'refresh', 'password', 'profile'].map((name) => [
+  return Object.fromEntries(['upload', 'feedback', 'recommendation', 'catalog', 'analysis', 'register', 'login', 'refresh', 'password', 'profile'].map((name) => [
     name,
     createRateLimiter({ name, limit: config[name] ?? defaults[name], windowMs: config.windowMs, store }),
   ]));

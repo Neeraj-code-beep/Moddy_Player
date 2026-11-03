@@ -5,9 +5,9 @@ const createApp = require('../src/app').createApp;
 const { createAccessToken } = require('../src/service/token.service');
 
 const config = { accessTokenSecret: 'test-secret-that-is-at-least-32-bytes-long', accessTokenTtlSeconds: 600, cookie: { refreshName: 'moddy_refresh', csrfName: 'moddy_csrf', path: '/auth', csrfPath: '/', sameSite: 'lax', secure: false }, refreshTtlDays: 30 };
-const userIds = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012'];
-const users = userIds.map((id, index) => ({ _id: id, id, name: `Listener ${index}`, email: `listener${index}@example.test`, role: 'user', status: 'active' }));
-const tokens = userIds.map((userId) => createAccessToken({ userId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'user' }, config));
+const userIds = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012', '507f1f77bcf86cd799439013'];
+const users = userIds.map((id, index) => ({ _id: id, id, name: `Listener ${index}`, email: `listener${index}@example.test`, role: index === 2 ? 'admin' : 'user', status: 'active' }));
+const tokens = userIds.map((userId, index) => createAccessToken({ userId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: index === 2 ? 'admin' : 'user' }, config));
 const audio = Buffer.from('RIFF0000WAVE');
 const highRateLimit = { windowMs: 60_000, upload: 100, feedback: 100, recommendation: 100, catalog: 100, trustedProxyHops: 0 };
 
@@ -15,6 +15,7 @@ function createModels() {
   const songs = [];
   const favorites = [];
   const playlists = [];
+  const analysisJobs = [];
   let nextSong = 1;
   let nextPlaylist = 1;
   const songModel = {
@@ -24,6 +25,8 @@ function createModels() {
         _id: new mongoose.Types.ObjectId(),
         ...data,
         mediaStatus: 'active',
+        metadataRevision: 0,
+        analysis: { status: 'not_configured' },
         async save() {},
         async deleteOne() { const index = songs.indexOf(record); if (index >= 0) songs.splice(index, 1); },
       };
@@ -34,9 +37,10 @@ function createModels() {
     findOne(filter) {
       const record = songs.find((song) => {
         if (filter.uploadFingerprint) return song.uploadFingerprint === filter.uploadFingerprint && song.uploadSource === filter.uploadSource && String(song.uploadedBy) === String(filter.uploadedBy);
+        if (Array.isArray(filter.uploadSource?.$in)) return String(song._id) === String(filter._id) && song.visibility === filter.visibility && filter.uploadSource.$in.includes(song.uploadSource);
         if (Array.isArray(filter._id?.$in)) return filter._id.$in.some((id) => String(id) === String(song._id)) && filter.$or?.some((condition) =>
           condition.visibility === 'private' && condition.uploadSource === 'user' && condition.$or?.some((owner) => String(song.uploadedBy) === String(owner.uploadedBy || '') || String(song.ownerId) === String(owner.ownerId || '')));
-        return String(song._id) === String(filter._id) && song.visibility === filter.visibility && song.uploadSource === filter.uploadSource &&
+        return String(song._id) === String(filter._id) && song.visibility === filter.visibility && (Array.isArray(filter.uploadSource?.$in) ? filter.uploadSource.$in.includes(song.uploadSource) : song.uploadSource === filter.uploadSource) &&
           (Array.isArray(filter.mediaStatus?.$in) ? filter.mediaStatus.$in.includes(song.mediaStatus) : song.mediaStatus === filter.mediaStatus) &&
           filter.$or?.some((owner) => String(song.uploadedBy) === String(owner.uploadedBy || '') || String(song.ownerId) === String(owner.ownerId || ''));
       });
@@ -50,6 +54,16 @@ function createModels() {
         : ids.has(String(song._id)) && filter.$or?.some((condition) => condition.visibility === 'private' && condition.uploadSource === 'user' && condition.$or?.some((owner) => String(song.uploadedBy) === String(owner.uploadedBy || '') || String(song.ownerId) === String(owner.ownerId || ''))));
       const query = { select: () => query, sort: () => query, skip: () => query, limit: () => query, lean: async () => rows };
       return query;
+    },
+    findById(id) { const row = songs.find((song) => String(song._id) === String(id)); return { select: async () => row || null, lean: async () => row || null }; },
+    async updateOne(filter, update) {
+      const row = songs.find((song) => String(song._id) === String(filter._id));
+      if (row) for (const [key, value] of Object.entries(update.$set || {})) {
+        const [parent, child] = key.split('.');
+        if (child) row[parent] = { ...(row[parent] || {}), [child]: value };
+        else row[key] = value;
+      }
+      return { matchedCount: row ? 1 : 0, modifiedCount: row ? 1 : 0 };
     },
     async countDocuments(filter) {
       const criteria = filter.$and?.[0];
@@ -90,7 +104,23 @@ function createModels() {
       }
     },
   };
-  return { songModel, favoriteModel, playlistModel };
+  const analysisJobModel = {
+    records: analysisJobs,
+    async findOneAndUpdate(filter, update) {
+      let row = analysisJobs.find((job) => String(job.songId) === String(filter.songId) && (!filter.status || job.status === filter.status));
+      if (!row && update.$setOnInsert) { row = { _id: new mongoose.Types.ObjectId(), ...update.$setOnInsert }; analysisJobs.push(row); }
+      if (row && update.$set) Object.assign(row, update.$set);
+      return row || null;
+    },
+    findById(id) { return { lean: async () => analysisJobs.find((job) => String(job._id) === String(id)) || null }; },
+    find(filter = {}) {
+      const rows = analysisJobs.filter((job) => !filter.status || job.status === filter.status);
+      const query = { sort: () => query, skip: (n) => { query.offset = n; return query; }, limit: (n) => { query.max = n; return query; }, lean: async () => rows.slice(query.offset || 0, (query.offset || 0) + (query.max || rows.length)) };
+      return query;
+    },
+    async countDocuments(filter = {}) { return analysisJobs.filter((job) => !filter.status || job.status === filter.status).length; },
+  };
+  return { songModel, favoriteModel, playlistModel, analysisJobModel };
 }
 
 function multipart(fields = { title: 'Private track', artist: 'Listener', mood: 'calm' }) {
@@ -107,8 +137,10 @@ let providerDeleteFails = false;
 let privateUploadOptions;
 let providerUploads = 0;
 const providerDeletes = [];
+const originalGeminiApiKey = process.env.GEMINI_API_KEY;
 
 before(async () => {
+  delete process.env.GEMINI_API_KEY;
   models = createModels();
   const app = createApp({
     ...models,
@@ -128,6 +160,8 @@ before(async () => {
 after(async () => {
   server.closeAllConnections();
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (originalGeminiApiKey === undefined) delete process.env.GEMINI_API_KEY;
+  else process.env.GEMINI_API_KEY = originalGeminiApiKey;
 });
 
 async function upload(userIndex = 0, fields) {
@@ -184,6 +218,66 @@ test('owners can update their metadata and suggestions while review endpoints re
   assert.equal(denied.status, 403);
 });
 
+test('analysis details are private to the owner and accepted metadata records its source and review state', async () => {
+  const song = models.songModel.records.find((item) => String(item.uploadedBy) === userIds[0]);
+  song.aiSuggestions = {
+    status: 'completed', mood: 'romantic', genre: 'jazz', energy: 'low', tags: ['soft'],
+    secondaryMoods: [], subgenres: [], listeningContexts: [], instrumentation: [], vocalCharacteristics: 'instrumental',
+    review: {},
+  };
+  song.analysis = { status: 'completed', jobId: new mongoose.Types.ObjectId(), model: 'gemini-test' };
+  const own = await fetch(`${baseUrl}/library/songs/${song._id}/analysis`, { headers: { authorization: `Bearer ${tokens[0]}` } });
+  assert.equal(own.status, 200);
+  assert.equal((await own.json()).analysis.suggestions.genre, 'jazz');
+  const other = await fetch(`${baseUrl}/library/songs/${song._id}/analysis`, { headers: { authorization: `Bearer ${tokens[1]}` } });
+  assert.equal(other.status, 404);
+
+  const review = await fetch(`${baseUrl}/library/songs/${song._id}/metadata-review`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: { mood: 'accepted', genre: 'rejected' } }),
+  });
+  assert.equal(review.status, 200);
+  assert.equal(song.mood, 'romantic');
+  assert.equal(song.genre, undefined, 'rejected suggestions are not applied to canonical metadata');
+  assert.equal(song.metadataProvenance.mood, 'user');
+  assert.equal(song.aiSuggestions.review.mood.source, 'ai');
+  assert.equal(song.aiSuggestions.review.mood.status, 'accepted');
+  assert.equal(song.aiSuggestions.review.genre.status, 'rejected');
+  assert.equal(song.metadataRevision, 2);
+});
+
+test('analysis administration is restricted to admins and catalog review preserves admin provenance', async () => {
+  const catalogSong = await models.songModel.create({
+    title: 'Catalog submission', artist: 'Studio', mood: 'happy', audio: 'https://media.example.test/catalog', audioMimeType: 'audio/wav',
+    storageFileId: 'catalog-file', uploadedBy: new mongoose.Types.ObjectId(userIds[2]), ownerId: new mongoose.Types.ObjectId(userIds[2]),
+    uploadedByRole: 'admin', uploadSource: 'admin', visibility: 'public', catalogStatus: 'pending',
+  });
+  catalogSong.aiSuggestions = { status: 'completed', mood: 'motivational', genre: 'rock', energy: 'high', tags: [], secondaryMoods: [], subgenres: [], listeningContexts: [], instrumentation: [], vocalCharacteristics: 'lead_vocals', review: {} };
+  catalogSong.analysis = { status: 'completed', jobId: new mongoose.Types.ObjectId() };
+  models.analysisJobModel.records.push({ _id: new mongoose.Types.ObjectId(), songId: catalogSong._id, status: 'failed', attempts: 3, maxAttempts: 3, lastErrorCode: 'provider_timeout', createdAt: new Date() });
+
+  const denied = await fetch(`${baseUrl}/library/admin/analysis/jobs`, { headers: { authorization: `Bearer ${tokens[0]}` } });
+  assert.equal(denied.status, 403);
+  const queue = await fetch(`${baseUrl}/library/admin/analysis/jobs?status=failed`, { headers: { authorization: `Bearer ${tokens[2]}` } });
+  assert.equal(queue.status, 200);
+  const queueBody = await queue.json();
+  assert.equal(queueBody.jobs.length, 1);
+  assert.equal(queueBody.jobs[0].lastErrorCode, 'provider_timeout');
+  assert.equal(queueBody.jobs[0].audio, undefined);
+
+  const analysis = await fetch(`${baseUrl}/library/admin/songs/${catalogSong._id}/analysis`, { headers: { authorization: `Bearer ${tokens[2]}` } });
+  assert.equal(analysis.status, 200);
+  const review = await fetch(`${baseUrl}/library/admin/songs/${catalogSong._id}/metadata-review`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${tokens[2]}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: { mood: 'accepted' } }),
+  });
+  assert.equal(review.status, 200);
+  assert.equal(catalogSong.mood, 'motivational');
+  assert.equal(catalogSong.metadataProvenance.mood, 'admin');
+  assert.equal(catalogSong.aiSuggestions.review.mood.source, 'ai');
+  assert.equal(catalogSong.aiSuggestions.review.mood.status, 'accepted');
+});
+
 test('favorites are unique, owner-scoped, and hide inaccessible songs', async () => {
   const song = models.songModel.records[0];
   const favoriteUrl = `${baseUrl}/library/favorites/${song._id}`;
@@ -226,7 +320,8 @@ test('media deletion failure remains retryable and cleans related favorites and 
 });
 
 test('playlist writes use owner scoping and an optimistic revision', async () => {
-  if (models.songModel.records.length === 0) await upload(0);
+  if (!models.songModel.records.some((song) => song.visibility === 'private' && String(song.uploadedBy) === userIds[0])) await upload(0);
+  const ownedSong = models.songModel.records.find((song) => song.visibility === 'private' && String(song.uploadedBy) === userIds[0]);
   const create = await fetch(`${baseUrl}/library/playlists`, { method: 'POST', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Focus' }) });
   assert.equal(create.status, 201);
   const { playlist } = await create.json();
@@ -234,9 +329,9 @@ test('playlist writes use owner scoping and an optimistic revision', async () =>
   assert.equal(denied.status, 409);
   const hidden = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { headers: { authorization: `Bearer ${tokens[1]}` } });
   assert.equal(hidden.status, 404);
-  const duplicate = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ songIds: [models.songModel.records[0]._id, models.songModel.records[0]._id], revision: 0 }) });
+  const duplicate = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ songIds: [ownedSong._id, ownedSong._id], revision: 0 }) });
   assert.equal(duplicate.status, 400);
-  const updated = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ songIds: [models.songModel.records[0]._id], revision: 0 }) });
+  const updated = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ songIds: [ownedSong._id], revision: 0 }) });
   assert.equal(updated.status, 200);
   const stale = await fetch(`${baseUrl}/library/playlists/${playlist.id}`, { method: 'PATCH', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Stale', revision: 0 }) });
   assert.equal(stale.status, 409);
