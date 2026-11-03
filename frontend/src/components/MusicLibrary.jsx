@@ -3,6 +3,35 @@ import { api } from '../api/api';
 import AdminCatalog from './AdminCatalog';
 
 const emptyForm = { title: '', artist: '', mood: 'calm', genre: '', energy: 'medium', tags: '' };
+const ANALYSIS_FIELDS = ['mood', 'secondaryMoods', 'genre', 'subgenres', 'energy', 'listeningContexts', 'instrumentation', 'vocalCharacteristics', 'language', 'tags'];
+
+function AnalysisReview({ song, onReview, onRetry }) {
+  const analysis = song.analysis || {};
+  const suggestions = song.aiSuggestions || {};
+  const status = analysis.status || suggestions.status || 'not_configured';
+  const label = { not_configured: 'Analysis not configured', queued: 'Waiting for analysis', processing: 'Analysis in progress', completed: 'Analysis complete', ready: 'Analysis available', failed: 'Analysis failed' }[status] || 'Analysis status unavailable';
+  return <section className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3" aria-label={`Music analysis for ${song.title}`}>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h5 className="font-medium text-white">Music analysis</h5><span role="status" className="text-sm text-white/60">{label}</span></div>
+    {analysis.errorCode && <p role="alert" className="mt-2 text-sm text-rose-200">Analysis could not finish ({analysis.errorCode}).</p>}
+    {status === 'failed' && <button type="button" onClick={() => void onRetry(song)} className="mt-3 rounded-full border border-amber-100/40 px-3 py-2 text-sm text-amber-50">Retry analysis</button>}
+    {status === 'completed' && <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+      {ANALYSIS_FIELDS.filter((field) => suggestions[field] !== undefined && suggestions[field] !== null).map((field) => {
+        const value = Array.isArray(suggestions[field]) ? suggestions[field].join(', ') : suggestions[field];
+        const review = suggestions.review?.[field];
+        return <div key={field} className="rounded-lg bg-white/5 p-3">
+          <dt className="text-xs font-semibold uppercase tracking-wide text-white/50">{field.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)}</dt>
+          <dd className="mt-1 text-sm text-white">{value}</dd>
+          <dd className="mt-2 text-xs text-white/50">{review?.status ? `Review: ${review.status}` : 'AI suggestion · pending review'}</dd>
+          {(!review || review.status === 'pending') && <div className="mt-2 flex gap-2">
+            <button type="button" onClick={() => void onReview(song, field, 'accepted')} aria-label={`Accept suggested ${field}`} className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-black">Accept</button>
+            <button type="button" onClick={() => void onReview(song, field, 'rejected')} aria-label={`Reject suggested ${field}`} className="rounded-full border border-white/20 px-3 py-1.5 text-xs text-white">Reject</button>
+          </div>}
+        </div>;
+      })}
+    </dl>}
+    {status === 'completed' && !ANALYSIS_FIELDS.some((field) => suggestions[field] !== undefined && suggestions[field] !== null) && <p className="mt-2 text-sm text-white/50">No supported suggestions were returned.</p>}
+  </section>;
+}
 
 export default function MusicLibrary({ user, onPlaySong }) {
   const [songs, setSongs] = useState([]);
@@ -20,6 +49,24 @@ export default function MusicLibrary({ user, onPlaySong }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const reviewAnalysis = async (song, field, decision) => {
+    setError('');
+    try {
+      await api.patch(`/library/songs/${song._id}/metadata-review`, { fields: { [field]: decision } });
+      setMessage(`Suggestion ${decision}.`);
+      await load();
+    } catch { setError('The suggestion review could not be saved.'); }
+  };
+
+  const retryAnalysis = async (song) => {
+    setError('');
+    try {
+      await api.post(`/library/songs/${song._id}/analysis/retry`);
+      setMessage('Analysis retry queued.');
+      await load();
+    } catch { setError('Analysis could not be retried. Check that the music analysis service is configured.'); }
+  };
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -154,6 +201,7 @@ export default function MusicLibrary({ user, onPlaySong }) {
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-100/70">Your music</p>
         <h2 id="library-title" className="mt-2 text-3xl font-semibold text-white">My Library</h2>
         <p className="mt-2 max-w-2xl text-sm text-white/60">Uploads stay private to your account. Add, edit, play, favorite, and organize your tracks here.</p>
+        <p className="mt-2 max-w-2xl text-xs text-white/45">When server-side music analysis is configured, uploaded audio is sent to the configured Gemini provider for semantic suggestions. Suggestions remain unverified until you review them.</p>
         {message && <p role="status" className="mt-4 text-sm text-emerald-200">{message}</p>}
         {error && <p role="alert" className="mt-4 text-sm text-rose-200">{error}</p>}
 
@@ -188,7 +236,7 @@ export default function MusicLibrary({ user, onPlaySong }) {
                 {['mood', 'genre', 'energy', 'tags', 'language'].map((field) => <label key={`suggestion-${field}`} className="grid gap-1 text-xs capitalize text-white/60">Suggested {field}<input name={`suggestion${field[0].toUpperCase()}${field.slice(1)}`} defaultValue={Array.isArray(song.aiSuggestions?.[field]) ? song.aiSuggestions[field].join(',') : song.aiSuggestions?.[field] || ''} className="rounded-lg border border-white/15 bg-transparent px-3 py-2 text-sm text-white" /></label>)}
                 <button disabled={busy} className="rounded-full bg-amber-100 px-4 py-2 text-sm font-semibold text-black">Save changes</button>
                 <button type="button" onClick={() => setEditingId(null)} className="rounded-full border border-white/20 px-4 py-2 text-sm text-white">Cancel</button>
-              </form> : <div className="flex flex-wrap items-center justify-between gap-3">
+              </form> : <><div className="flex flex-wrap items-center justify-between gap-3">
                 <div><h4 className="font-medium text-white">{song.title}</h4><p className="text-sm text-white/60">{song.artist} · {song.mood} · Private · {song.mediaStatus === 'deletion_failed' ? 'Media cleanup needs a retry' : song.aiSuggestions?.status || 'AI categorization not configured'}</p></div>
                 <div className="flex flex-wrap gap-2">
                   <button disabled={song.mediaStatus !== 'active'} onClick={() => onPlaySong(song)} className="rounded-full bg-white/10 px-4 py-2 text-sm text-white disabled:opacity-40">Play</button>
@@ -197,7 +245,7 @@ export default function MusicLibrary({ user, onPlaySong }) {
                   <button onClick={() => void removeSong(song)} className="rounded-full border border-rose-200/30 px-4 py-2 text-sm text-rose-100">{song.mediaStatus === 'deletion_failed' ? 'Retry media cleanup' : 'Delete'}</button>
                   {song.mediaStatus === 'active' && playlists.length > 0 && <><label className="sr-only" htmlFor={`playlist-for-${song._id}`}>Choose a playlist</label><select id={`playlist-for-${song._id}`} value={activePlaylistId} onChange={(event) => setActivePlaylistId(event.target.value)} className="max-w-36 rounded-full border border-white/20 bg-[#181816] px-3 py-2 text-sm text-white"><option value="">Playlist…</option>{playlists.map((playlist) => <option key={playlist.id} value={playlist.id}>{playlist.name}</option>)}</select><button onClick={() => void addToPlaylist(song)} className="rounded-full border border-white/20 px-4 py-2 text-sm text-white">Add</button></>}
                 </div>
-              </div>}
+              </div><AnalysisReview song={song} onReview={reviewAnalysis} onRetry={retryAnalysis} /></>}
             </article>
           ))}
           {!songs.length && <p className="rounded-2xl border border-dashed border-white/15 p-6 text-sm text-white/60">Your library is empty. Upload a song to get started.</p>}
