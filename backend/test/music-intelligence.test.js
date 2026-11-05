@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { getMusicIntelligenceConfig } = require('../src/config/music-intelligence');
 const { MetadataValidationError, validateMusicMetadata } = require('../src/service/music-metadata-validation.service');
 const { ProviderError, RESPONSE_SCHEMA, analyzeAudioWithGemini } = require('../src/service/gemini-music-provider.service');
-const { AudioAssetError, assertTrustedAssetUrl, readBoundedBody } = require('../src/service/song-audio-asset.service');
+const { AudioAssetError, assertTrustedAssetUrl, readBoundedBody, retrieveSongAudio } = require('../src/service/song-audio-asset.service');
 const { delayForAttempt, errorDetails, initialReviewState } = require('../src/service/song-analysis-worker.service');
 const { buildUserPreferenceProfile, rankSongs } = require('../src/service/recommendation.service');
 
@@ -83,6 +83,46 @@ test('stored audio retrieval rejects cross-origin URLs and enforces a byte limit
   assert.throws(() => assertTrustedAssetUrl('http://ik.example/songs/file.mp3', 'https://ik.example/songs'), AudioAssetError);
   const oversized = new Response(new Uint8Array([1, 2]), { headers: { 'content-length': '10' } });
   await assert.rejects(readBoundedBody(oversized, 4), (error) => error.code === 'audio_size_unsupported');
+});
+
+test('ImageKit retrieval refreshes signed delivery URLs and classifies expiry and transient transfer failures safely', async () => {
+  const song = { audio: 'https://ik.example.test/account/songs/test.wav', audioMimeType: 'audio/wav' };
+  const generatedUrls = [];
+  let deliveryUrlCalls = 0;
+  const getDeliveryUrl = async (audio) => {
+    deliveryUrlCalls += 1;
+    const signed = `${audio}?token=short-lived-${deliveryUrlCalls}`;
+    generatedUrls.push(signed);
+    return signed;
+  };
+  const result = await retrieveSongAudio(song, {
+    getDeliveryUrl,
+    imageKitEndpoint: 'https://ik.example.test/account',
+    fetchImpl: async (url, options) => {
+      assert.equal(String(url), generatedUrls.at(-1));
+      assert.equal(options.redirect, 'error');
+      return new Response(Buffer.from('wav data'), { status: 200 });
+    },
+  });
+  assert.equal(result.audio.toString(), 'wav data');
+  assert.equal(deliveryUrlCalls, 1);
+
+  await assert.rejects(retrieveSongAudio(song, {
+    getDeliveryUrl,
+    imageKitEndpoint: 'https://ik.example.test/account',
+    fetchImpl: async () => new Response('', { status: 403 }),
+  }), (error) => error instanceof AudioAssetError && error.code === 'asset_access_denied' && !error.retryable);
+  await assert.rejects(retrieveSongAudio(song, {
+    getDeliveryUrl,
+    imageKitEndpoint: 'https://ik.example.test/account',
+    fetchImpl: async () => new Response('', { status: 408 }),
+  }), (error) => error instanceof AudioAssetError && error.code === 'asset_provider_unavailable' && error.retryable);
+  await assert.rejects(retrieveSongAudio(song, {
+    getDeliveryUrl,
+    imageKitEndpoint: 'https://ik.example.test/account',
+    fetchImpl: async () => { const error = new Error('sensitive host details'); error.name = 'TimeoutError'; throw error; },
+  }), (error) => error instanceof AudioAssetError && error.code === 'asset_fetch_timeout' && error.retryable && !error.message.includes('sensitive'));
+  assert.equal(deliveryUrlCalls, 4, 'each attempt signs a fresh URL rather than reusing the expired one');
 });
 
 test('worker delay is exponential with bounded jitter and diagnostics expose only codes', () => {

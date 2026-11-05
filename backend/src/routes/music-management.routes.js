@@ -13,6 +13,7 @@ const Playlist = require('../models/playlist.model');
 const SongAnalysisJob = require('../models/song-analysis-job.model');
 const { enqueueSongAnalysis } = require('../service/song-analysis-queue.service');
 const { retrySongAnalysis } = require('../service/song-analysis-queue.service');
+const { runSongAnalysisBackfill } = require('../service/song-analysis-backfill.service');
 const { getMusicIntelligenceConfig } = require('../config/music-intelligence');
 
 const MAX_PLAYLIST_SONGS = 500;
@@ -146,6 +147,7 @@ function createMusicManagementRouter({
   playlistModel = Playlist,
   analysisJobModel = SongAnalysisJob,
   enqueueAnalysis = enqueueSongAnalysis,
+  runBackfill = runSongAnalysisBackfill,
   userModel,
   authConfigProvider,
   uploadFile: configuredUploadFile,
@@ -501,6 +503,24 @@ function createMusicManagementRouter({
       startedAt: job.startedAt, completedAt: job.completedAt, lastErrorCode: job.lastErrorCode,
       resultStatus: job.resultStatus, provider: job.provider, model: job.model,
     })), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  });
+
+  router.post('/admin/analysis/backfill', authenticate, requireAdmin, rateLimiters.analysis || ((_req, _res, next) => next()), async (req, res) => {
+    const body = req.body || {};
+    const allowed = new Set(['dryRun', 'reprocess', 'afterId', 'limit']);
+    if (typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowed.has(key))) {
+      throw new ApiError(400, 'INVALID_BACKFILL_REQUEST', 'Provide only dryRun, reprocess, afterId, and limit.');
+    }
+    const dryRun = body.dryRun === undefined ? true : body.dryRun;
+    const reprocess = body.reprocess === undefined ? false : body.reprocess;
+    const limit = body.limit === undefined ? 50 : body.limit;
+    const afterId = body.afterId === undefined ? null : body.afterId;
+    if (typeof dryRun !== 'boolean' || typeof reprocess !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        (afterId !== null && (typeof afterId !== 'string' || !/^[a-f\d]{24}$/i.test(afterId)))) {
+      throw new ApiError(400, 'INVALID_BACKFILL_REQUEST', 'Use a boolean dryRun and reprocess, a limit from 1 to 100, and an optional MongoDB ObjectId cursor.');
+    }
+    const result = await runBackfill({ songModel, jobModel: analysisJobModel, enqueueAnalysis, requestedBy: ownerId(req), dryRun, reprocess, afterId, limit });
+    res.status(200).json(result);
   });
 
   router.post('/admin/analysis/jobs/:id/retry', authenticate, requireAdmin, rateLimiters.analysis || ((_req, _res, next) => next()), async (req, res) => {

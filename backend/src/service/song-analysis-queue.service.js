@@ -8,6 +8,7 @@ async function enqueueSongAnalysis(song, {
   config = getMusicIntelligenceConfig(),
   requestedBy = song.uploadedBy || song.ownerId || null,
   requestSource = 'upload',
+  reprocess = false,
 } = {}) {
   if (!config.enabled) return { queued: false, reason: 'not_configured' };
   const songId = song._id;
@@ -36,6 +37,11 @@ async function enqueueSongAnalysis(song, {
   } catch (error) {
     if (error?.code !== 11000) throw error;
     job = await jobModel.findOne({ songId });
+  }
+  if (!job) throw new Error('analysis_job_persistence_failed');
+  if (reprocess && job.status === 'completed') {
+    job = await jobModel.findOneAndUpdate({ songId, status: 'completed' }, { $set: jobData }, { new: true })
+      || await jobModel.findOne({ songId });
   }
   if (!job) throw new Error('analysis_job_persistence_failed');
   if (job.status === 'queued' || job.status === 'processing') {

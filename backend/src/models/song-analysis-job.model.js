@@ -4,7 +4,7 @@ const songAnalysisJobSchema = new mongoose.Schema({
   songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true, unique: true },
   status: { type: String, enum: ['queued', 'processing', 'completed', 'failed'], required: true, default: 'queued' },
   requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  requestSource: { type: String, enum: ['upload', 'owner_retry', 'admin_retry'], required: true, default: 'upload' },
+  requestSource: { type: String, enum: ['upload', 'owner_retry', 'admin_retry', 'admin_backfill'], required: true, default: 'upload' },
   metadataRevision: { type: Number, required: true, min: 0 },
   attempts: { type: Number, required: true, default: 0, min: 0 },
   maxAttempts: { type: Number, required: true, min: 1, max: 10 },

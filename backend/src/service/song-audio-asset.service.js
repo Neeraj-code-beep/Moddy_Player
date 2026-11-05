@@ -28,7 +28,9 @@ async function readBoundedBody(response, limit) {
   const chunks = [];
   let length = 0;
   while (true) {
-    const { done, value } = await reader.read();
+    let part;
+    try { part = await reader.read(); } catch { throw new AudioAssetError('asset_transfer_failed', true); }
+    const { done, value } = part;
     if (done) break;
     length += value.byteLength;
     if (length > limit) {
@@ -48,10 +50,21 @@ async function retrieveSongAudio(song, {
 } = {}) {
   if (!song?.audio || !song?.audioMimeType || !GEMINI_MIME_TYPES.has(song.audioMimeType)) throw new AudioAssetError('audio_format_unsupported');
   if (!imageKitEndpoint) throw new AudioAssetError('asset_source_unavailable', true);
-  const deliveryUrl = await getDeliveryUrl(song.audio);
+  let deliveryUrl;
+  try { deliveryUrl = await getDeliveryUrl(song.audio); } catch { throw new AudioAssetError('asset_signing_failed'); }
   const safeUrl = assertTrustedAssetUrl(deliveryUrl, imageKitEndpoint);
-  const response = await fetchImpl(safeUrl, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) throw new AudioAssetError(response.status >= 500 || response.status === 429 ? 'asset_provider_unavailable' : 'asset_fetch_rejected', response.status >= 500 || response.status === 429);
+  let response;
+  try {
+    response = await fetchImpl(safeUrl, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    const timeout = error?.name === 'AbortError' || error?.name === 'TimeoutError';
+    throw new AudioAssetError(timeout ? 'asset_fetch_timeout' : 'asset_provider_unavailable', true);
+  }
+  if (!response.ok) {
+    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    const code = retryable ? 'asset_provider_unavailable' : response.status === 401 || response.status === 403 ? 'asset_access_denied' : 'asset_fetch_rejected';
+    throw new AudioAssetError(code, retryable);
+  }
   const audio = await readBoundedBody(response, MAX_ANALYSIS_AUDIO_BYTES);
   if (!audio.length) throw new AudioAssetError('audio_body_missing', true);
   return { audio, mimeType: song.audioMimeType };

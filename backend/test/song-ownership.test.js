@@ -31,7 +31,7 @@ test('song analysis jobs are unique per song and support bounded leases and atte
   assert.ok(SongAnalysisJob.schema.indexes().some(([keys, options]) => keys.songId === 1 && options.unique));
   assert.ok(SongAnalysisJob.schema.indexes().some(([keys]) => keys.status === 1 && keys.availableAt === 1));
   assert.ok(SongAnalysisJob.schema.indexes().some(([keys]) => keys.status === 1 && keys.leaseUntil === 1));
-  const job = new SongAnalysisJob({ songId: '507f1f77bcf86cd799439011', metadataRevision: 0, maxAttempts: 3, model: 'gemini-test' });
+  const job = new SongAnalysisJob({ songId: '507f1f77bcf86cd799439011', requestSource: 'admin_backfill', metadataRevision: 0, maxAttempts: 3, model: 'gemini-test' });
   await job.validate();
   job.maxAttempts = 11;
   await assert.rejects(job.validate(), /maxAttempts/);

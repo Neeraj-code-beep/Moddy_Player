@@ -136,18 +136,24 @@ let models;
 let providerDeleteFails = false;
 let privateUploadOptions;
 let providerUploads = 0;
+const backfillCalls = [];
 const providerDeletes = [];
 const originalGeminiApiKey = process.env.GEMINI_API_KEY;
 
 before(async () => {
   delete process.env.GEMINI_API_KEY;
   models = createModels();
+  backfillCalls.length = 0;
   const app = createApp({
     ...models,
     userModel: { async findById(id) { return users.find((user) => user.id === String(id)) || null; } },
     authConfig: config,
     isDatabaseReady: () => true,
     rateLimitConfig: highRateLimit,
+    runBackfill: async (options) => {
+      backfillCalls.push(options);
+      return { dryRun: options.dryRun, reprocess: options.reprocess, counts: { scanned: 0, eligible: 0, wouldQueue: 0, skipped: 0, queued: 0, failed: 0 } };
+    },
     uploadFile: async (_file, _name, options) => { providerUploads += 1; privateUploadOptions = options; return { fileId: `private-provider-id-${providerUploads}`, url: 'https://media.example.test/private-song' }; },
     deleteFile: async (id) => { providerDeletes.push(id); if (providerDeleteFails) { providerDeleteFails = false; throw new Error('temporary provider failure'); } },
     getDeliveryUrl: async (url) => `${url}?sig=short-lived`,
@@ -276,6 +282,35 @@ test('analysis administration is restricted to admins and catalog review preserv
   assert.equal(catalogSong.metadataProvenance.mood, 'admin');
   assert.equal(catalogSong.aiSuggestions.review.mood.source, 'ai');
   assert.equal(catalogSong.aiSuggestions.review.mood.status, 'accepted');
+});
+
+test('catalog backfill is admin-only, dry-run by default, bounded, and accepts only the supported options', async () => {
+  const denied = await fetch(`${baseUrl}/library/admin/analysis/backfill`, {
+    method: 'POST', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ dryRun: false }),
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(backfillCalls.length, 0);
+
+  const dryRun = await fetch(`${baseUrl}/library/admin/analysis/backfill`, {
+    method: 'POST', headers: { authorization: `Bearer ${tokens[2]}`, 'content-type': 'application/json' }, body: JSON.stringify({ limit: 10 }),
+  });
+  assert.equal(dryRun.status, 200);
+  assert.equal((await dryRun.json()).dryRun, true);
+  assert.equal(backfillCalls[0].requestedBy.toString(), userIds[2]);
+  assert.equal(backfillCalls[0].reprocess, false);
+
+  const enqueue = await fetch(`${baseUrl}/library/admin/analysis/backfill`, {
+    method: 'POST', headers: { authorization: `Bearer ${tokens[2]}`, 'content-type': 'application/json' }, body: JSON.stringify({ dryRun: false, reprocess: true, limit: 25 }),
+  });
+  assert.equal(enqueue.status, 200);
+  assert.equal(backfillCalls[1].dryRun, false);
+  assert.equal(backfillCalls[1].reprocess, true);
+
+  const invalid = await fetch(`${baseUrl}/library/admin/analysis/backfill`, {
+    method: 'POST', headers: { authorization: `Bearer ${tokens[2]}`, 'content-type': 'application/json' }, body: JSON.stringify({ limit: 101 }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(backfillCalls.length, 2);
 });
 
 test('favorites are unique, owner-scoped, and hide inaccessible songs', async () => {

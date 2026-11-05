@@ -113,6 +113,32 @@ test('upload enqueue is idempotent per song and leaves a disabled provider unque
   assert.deepEqual(disabled, { queued: false, reason: 'not_configured' });
 });
 
+test('explicit admin backfill reprocess resets an existing completed job without creating another', async () => {
+  const job = { _id: 'job-reprocess', songId: 'song-reprocess', status: 'completed', attempts: 1, maxAttempts: 3 };
+  const jobModel = {
+    findOneAndUpdate: async (filter, update) => {
+      if (update.$setOnInsert) return job;
+      if (filter.status === 'completed' && job.status === 'completed') {
+        Object.assign(job, update.$set);
+        return job;
+      }
+      return null;
+    },
+    findOne: async () => job,
+  };
+  const songWrites = [];
+  const songModel = { updateOne: async (...args) => { songWrites.push(args); return { matchedCount: 1 }; } };
+  const result = await enqueueSongAnalysis({ _id: job.songId, metadataRevision: 4 }, {
+    songModel, jobModel, config, requestedBy: 'admin', requestSource: 'admin_backfill', reprocess: true,
+  });
+  assert.equal(result.queued, true);
+  assert.equal(result.job._id, job._id);
+  assert.equal(job.status, 'queued');
+  assert.equal(job.attempts, 0);
+  assert.equal(job.metadataRevision, 4);
+  assert.equal(songWrites[0][1].$set['analysis.status'], 'queued');
+});
+
 test('worker applies suggestions without mutating uploaded metadata and tags each field for review', async () => {
   const song = { _id: 'song-4', audio: 'https://cdn.example/song', audioMimeType: 'audio/mpeg', storageFileId: 'provider-id', mediaStatus: 'active', metadataRevision: 2, mood: 'happy', analysis: { status: 'queued', jobId: 'job-4' } };
   const songHarnessData = songHarness(song);
