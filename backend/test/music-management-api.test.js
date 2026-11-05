@@ -8,6 +8,14 @@ const config = { accessTokenSecret: 'test-secret-that-is-at-least-32-bytes-long'
 const userIds = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012', '507f1f77bcf86cd799439013'];
 const users = userIds.map((id, index) => ({ _id: id, id, name: `Listener ${index}`, email: `listener${index}@example.test`, role: index === 2 ? 'admin' : 'user', status: 'active' }));
 const tokens = userIds.map((userId, index) => createAccessToken({ userId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: index === 2 ? 'admin' : 'user' }, config));
+const authSessionModel = {
+  findOne(filter) {
+    const value = userIds.includes(String(filter.userId)) && filter.familyId === 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6' && filter.status === 'active'
+      ? { _id: 'active-session' }
+      : null;
+    return { select() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } };
+  },
+};
 const audio = Buffer.from('RIFF0000WAVE');
 const highRateLimit = { windowMs: 60_000, upload: 100, feedback: 100, recommendation: 100, catalog: 100, trustedProxyHops: 0 };
 
@@ -147,6 +155,7 @@ before(async () => {
   const app = createApp({
     ...models,
     userModel: { async findById(id) { return users.find((user) => user.id === String(id)) || null; } },
+    authSessionModel,
     authConfig: config,
     isDatabaseReady: () => true,
     rateLimitConfig: highRateLimit,

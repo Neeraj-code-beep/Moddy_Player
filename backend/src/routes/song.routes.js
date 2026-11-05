@@ -85,16 +85,17 @@ function createSongRouter({
   rateLimiters = {},
   onFeedbackDatabaseError,
   userModel,
+  authSessionModel,
   authConfigProvider,
 } = {}) {
   const uploadFile = configuredUploadFile || ((...args) => require('../service/storage.service')(...args));
   const deleteFile = configuredDeleteFile || ((fileId) => require('../service/storage.service').deleteFile(fileId));
   const router = express.Router();
   const authenticate = userModel && authConfigProvider
-    ? createAuthenticate({ userModel, configProvider: authConfigProvider })
+    ? createAuthenticate({ userModel, sessionModel: authSessionModel, configProvider: authConfigProvider })
     : (req, res, next) => next(new ApiError(503, 'AUTH_UNAVAILABLE', 'Authentication is unavailable.'));
   const optionalAuthenticate = userModel && authConfigProvider
-    ? createOptionalAuthenticate({ userModel, configProvider: authConfigProvider })
+    ? createOptionalAuthenticate({ userModel, sessionModel: authSessionModel, configProvider: authConfigProvider })
     : (req, res, next) => next();
   const requireAdmin = requireRole('admin');
   function visibleSongFilter() {

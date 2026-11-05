@@ -12,6 +12,7 @@ const config = {
 const userId = '507f1f77bcf86cd799439013';
 const users = new Map();
 const sessions = [];
+let failSessionCreation = false;
 
 function query(value) {
   return { select() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } };
@@ -21,18 +22,30 @@ const userModel = {
   findOne(filter) { return query([...users.values()].find((user) => user.email === filter.email) || null); },
   findById(id) { return Promise.resolve(users.get(String(id)) || null); },
   async create(data) {
-    const user = {
-      _id: userId, id: userId, ...data, role: data.role || 'user', status: 'active', bio: '', avatarUrl: null,
+    const records = Array.isArray(data) ? data : [data];
+    const created = records.map((record) => ({
+      _id: userId, id: userId, ...record, role: record.role || 'user', status: 'active', bio: '', avatarUrl: null,
       toObject() { return { ...this }; },
       async save() { users.set(String(this._id), this); return this; },
-    };
-    users.set(userId, user);
-    return user;
+    }));
+    for (const user of created) users.set(String(user._id), user);
+    return Array.isArray(data) ? created : created[0];
   },
 };
 const sessionModel = {
-  async create(data) { sessions.push(...(Array.isArray(data) ? data : [data])); return data; },
-  async findOne(filter) { return sessions.find((session) => session.tokenHash === filter.tokenHash) || null; },
+  async create(data) {
+    if (failSessionCreation) throw new Error('Injected session write failure.');
+    const records = Array.isArray(data) ? data : [data];
+    sessions.push(...records);
+    return Array.isArray(data) ? records : records[0];
+  },
+  findOne(filter) {
+    const value = sessions.find((session) => filter.tokenHash
+      ? session.tokenHash === filter.tokenHash
+      : String(session.userId) === String(filter.userId) && session.familyId === filter.familyId &&
+        session.status === filter.status && session.expiresAt > filter.expiresAt.$gt) || null;
+    return { select() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } };
+  },
   async updateMany(filter, update) {
     let modifiedCount = 0;
     for (const session of sessions) {
@@ -45,12 +58,31 @@ const sessionModel = {
     return { modifiedCount };
   },
 };
+const fakeMongo = {
+  async startSession() {
+    return {
+      async withTransaction(callback) {
+        const userSnapshot = new Map(users);
+        const sessionSnapshot = sessions.slice();
+        try {
+          return await callback();
+        } catch (error) {
+          users.clear();
+          for (const [key, value] of userSnapshot) users.set(key, value);
+          sessions.splice(0, sessions.length, ...sessionSnapshot);
+          throw error;
+        }
+      },
+      async endSession() {},
+    };
+  },
+};
 
 let server;
 let baseUrl;
 before(async () => {
   users.clear(); sessions.length = 0;
-  const app = createApp({ userModel, authSessionModel: sessionModel, authConfig: config, corsOrigins: new Set(['http://localhost:5173']), isDatabaseReady: () => true });
+  const app = createApp({ userModel, authSessionModel: sessionModel, authConfig: config, mongo: fakeMongo, corsOrigins: new Set(['http://localhost:5173']), isDatabaseReady: () => true });
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -75,6 +107,8 @@ test('registration creates a user role, returns a short-lived access token, and 
   assert.equal(data.user.passwordHash, undefined);
   assert.equal(users.get(userId).role, 'user');
   assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].tokenHash.length, 64);
+  assert.notEqual(sessions[0].tokenHash, response.headers.getSetCookie().find((cookie) => cookie.startsWith('moddy_refresh=')).split(';')[0].slice('moddy_refresh='.length));
   assert.ok(data.accessToken);
   const cookies = response.headers.getSetCookie();
   assert.ok(cookies.some((cookie) => cookie.startsWith('moddy_refresh=') && cookie.includes('HttpOnly') && cookie.includes('Path=/auth')));
@@ -88,7 +122,7 @@ test('registration creates a user role, returns a short-lived access token, and 
 });
 
 test('issued bearer token authorizes current-user endpoint and rejects a disabled account', async () => {
-  const token = createAccessToken({ userId, familyId: '5b59d118-8de3-47ef-9db2-93a13b6ed85f', role: 'user' }, config);
+  const token = createAccessToken({ userId, familyId: sessions.find((session) => session.status === 'active').familyId, role: 'user' }, config);
   const success = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${token}` } });
   assert.equal(success.status, 200);
   const user = await success.json();
@@ -107,7 +141,7 @@ test('issued bearer token authorizes current-user endpoint and rejects a disable
 
 test('profile updates accept only safe fields and logout-all revokes user sessions', async () => {
   users.get(userId).status = 'active';
-  const token = createAccessToken({ userId, familyId: '21723130-9f9a-4a94-a62d-3b3e55f63f91', role: 'user' }, config);
+  const token = createAccessToken({ userId, familyId: sessions.find((session) => session.status === 'active').familyId, role: 'user' }, config);
   const updated = await fetch(`${baseUrl}/users/me`, {
     method: 'PATCH', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'Updated User', bio: 'A short bio' }),
@@ -149,6 +183,10 @@ test('login verifies stored Argon2 credentials and logout requires the double-su
   });
   assert.equal(logout.status, 204);
   assert.ok(sessions.some((session) => session.status === 'revoked'));
+  const accessToken = (await login.json()).accessToken;
+  const revokedAccess = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${accessToken}` } });
+  assert.equal(revokedAccess.status, 401);
+  assert.equal((await revokedAccess.json()).error.code, 'AUTH_INVALID_TOKEN');
 });
 
 test('untrusted browser origins cannot use credentialed auth and malformed registration is rejected', async () => {
@@ -162,4 +200,21 @@ test('untrusted browser origins cannot use credentialed auth and malformed regis
     body: JSON.stringify({ name: 'Another', email: 'another@example.test', password: 'weak' }),
   });
   assert.equal(invalid.status, 400);
+});
+
+test('registration rolls back the user if refresh-session creation fails', async () => {
+  const beforeSessions = sessions.length;
+  failSessionCreation = true;
+  try {
+    const response = await fetch(`${baseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Rollback User', email: 'rollback@example.test', password: 'Moddy_Player_2026!' }),
+    });
+    assert.equal(response.status, 500);
+    assert.equal(users.get(userId).email, 'user@example.test');
+    assert.equal(sessions.length, beforeSessions);
+  } finally {
+    failSessionCreation = false;
+  }
 });

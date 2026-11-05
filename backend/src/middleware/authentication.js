@@ -1,9 +1,10 @@
 const crypto = require('node:crypto');
 const mongoose = require('mongoose');
+const defaultAuthSessionModel = require('../models/auth-session.model');
 const ApiError = require('../utils/api-error');
 const { verifyAccessToken } = require('../service/token.service');
 
-function createAuthenticate({ userModel, configProvider, now = () => new Date() }) {
+function createAuthenticate({ userModel, sessionModel = defaultAuthSessionModel, configProvider, now = () => new Date() }) {
   return async function authenticate(req, res, next) {
     const authorization = req.get('authorization') || '';
     const match = /^Bearer ([A-Za-z0-9._~-]{1,4096})$/.exec(authorization);
@@ -22,6 +23,15 @@ function createAuthenticate({ userModel, configProvider, now = () => new Date() 
     if (!user || user.status !== 'active') {
       return next(new ApiError(401, 'AUTH_REQUIRED', 'Authentication is required.'));
     }
+    const activeSession = await sessionModel.findOne({
+      userId: user._id || user.id,
+      familyId: claims.sid,
+      status: 'active',
+      expiresAt: { $gt: now() },
+    }).select('_id');
+    if (!activeSession) {
+      return next(new ApiError(401, 'AUTH_INVALID_TOKEN', 'The access token is invalid or has expired.'));
+    }
     req.user = user;
     req.auth = { userId: String(user._id || user.id), familyId: claims.sid, tokenId: claims.jti };
     return next();
@@ -37,8 +47,8 @@ function requireRole(...roles) {
   };
 }
 
-function createOptionalAuthenticate({ userModel, configProvider, now = () => new Date() }) {
-  const authenticate = createAuthenticate({ userModel, configProvider, now });
+function createOptionalAuthenticate({ userModel, sessionModel, configProvider, now = () => new Date() }) {
+  const authenticate = createAuthenticate({ userModel, sessionModel, configProvider, now });
   return function optionalAuthenticate(req, res, next) {
     if (!req.get('authorization')) return next();
     return authenticate(req, res, next);

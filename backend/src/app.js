@@ -37,11 +37,29 @@ function normalizeError(error) {
   return new ApiError(500, 'INTERNAL_ERROR', 'An unexpected server error occurred.');
 }
 
-function getCorsOrigins(configuredOrigins = process.env.CORS_ALLOWED_ORIGINS) {
-  if (!configuredOrigins) {
+function getCorsOrigins(configuredOrigins = process.env.CORS_ALLOWED_ORIGINS, nodeEnv = process.env.NODE_ENV) {
+  if (!configuredOrigins || !configuredOrigins.trim()) {
+    if (nodeEnv === 'production') throw new Error('CORS_ALLOWED_ORIGINS is required in production.');
     return new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
   }
-  return new Set(configuredOrigins.split(',').map((origin) => origin.trim()).filter(Boolean));
+  const origins = configuredOrigins.split(',').map((origin) => origin.trim()).filter(Boolean);
+  if (!origins.length) {
+    if (nodeEnv === 'production') throw new Error('CORS_ALLOWED_ORIGINS is required in production.');
+    return new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  }
+  for (const origin of origins) {
+    let parsed;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error('CORS_ALLOWED_ORIGINS must contain exact web origins.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== origin ||
+        parsed.username || parsed.password || (nodeEnv === 'production' && parsed.protocol !== 'https:')) {
+      throw new Error('CORS_ALLOWED_ORIGINS must contain exact HTTPS origins in production.');
+    }
+  }
+  return new Set(origins);
 }
 
 function createApp(options = {}) {
@@ -90,14 +108,15 @@ function createApp(options = {}) {
   });
   app.get('/live', (req, res) => res.status(200).json({ status: 'live' }));
 
-  app.use('/auth', createAuthRouter({ authService, userModel, configProvider, allowedOrigins, rateLimiters }));
-  app.use('/users', createUserRouter({ authService, userModel, configProvider, rateLimiters }));
+  app.use('/auth', createAuthRouter({ authService, userModel, sessionModel: authSessionModel, configProvider, allowedOrigins, rateLimiters }));
+  app.use('/users', createUserRouter({ authService, userModel, sessionModel: authSessionModel, configProvider, rateLimiters }));
   app.use('/', createSongRouter({
     ...options,
     rateLimiters,
     uploadLimitBytes: options.uploadLimitBytes ?? getUploadLimitBytes(),
     imageKitResponseTimeoutMs: options.imageKitResponseTimeoutMs ?? getImageKitResponseTimeoutMs(),
     userModel,
+    authSessionModel,
     authConfigProvider: configProvider,
   }));
   app.use('/library', createMusicManagementRouter({
@@ -106,6 +125,7 @@ function createApp(options = {}) {
     uploadLimitBytes: options.uploadLimitBytes ?? getUploadLimitBytes(),
     imageKitResponseTimeoutMs: options.imageKitResponseTimeoutMs ?? getImageKitResponseTimeoutMs(),
     userModel,
+    authSessionModel,
     authConfigProvider: configProvider,
   }));
   app.use((req, res, next) => {

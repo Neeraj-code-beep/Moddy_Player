@@ -8,6 +8,14 @@ const authConfig = { accessTokenSecret: 'test-secret-that-is-at-least-32-bytes-l
 const accountId = '507f1f77bcf86cd799439014';
 const account = { _id: accountId, id: accountId, role: 'user', status: 'active' };
 const accountToken = createAccessToken({ userId: accountId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'user' }, authConfig);
+const authSessionModel = {
+  findOne(filter) {
+    const value = String(filter.userId) === accountId && filter.familyId === 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6' && filter.status === 'active'
+      ? { _id: 'active-session' }
+      : null;
+    return { select() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } };
+  },
+};
 const favoriteRows = [];
 const feedbackRows = [];
 
@@ -47,7 +55,7 @@ const feedbackModel = {
 const quotaModel = { async exists() { return true; }, async findOneAndUpdate() { return { count: 1 }; } };
 
 before(async () => {
-  server = createApp({ songModel, feedbackModel, feedbackSessionQuotaModel: quotaModel, favoriteModel, userModel: { async findById(id) { return id === accountId ? account : null; } }, authConfig, isDatabaseReady: () => true }).listen(0, '127.0.0.1');
+  server = createApp({ songModel, feedbackModel, feedbackSessionQuotaModel: quotaModel, favoriteModel, userModel: { async findById(id) { return id === accountId ? account : null; } }, authSessionModel, authConfig, isDatabaseReady: () => true }).listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => {
     server.once('listening', resolve);
     server.once('error', reject);

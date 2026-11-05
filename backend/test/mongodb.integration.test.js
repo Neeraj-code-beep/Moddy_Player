@@ -3,7 +3,9 @@ const crypto = require('node:crypto');
 const mongoose = require('mongoose');
 const { test } = require('node:test');
 const createApp = require('../src/app').createApp;
-const { createAccessToken } = require('../src/service/token.service');
+const { createAuthService } = require('../src/service/auth.service');
+const { hashPassword } = require('../src/service/password.service');
+const { createAccessToken, hashOpaqueToken } = require('../src/service/token.service');
 const {
   INTEGRATION_DATABASE_NAME,
   PROTECTED_DATABASE_NAMES,
@@ -59,13 +61,14 @@ test('MongoDB connection diagnostics redact hosts, credentials, and URI strings'
   assert.equal(JSON.stringify(diagnostic).includes('password@'), false);
 });
 
-test('isolated MongoDB integration: startup, songs, catalog, recommendations, feedback, indexes, and disconnect', {
+test('isolated MongoDB integration: authentication transactions, songs, catalog, recommendations, feedback, indexes, cleanup, and disconnect', {
   skip: !integrationUrl,
 }, async () => {
   const connection = mongoose.createConnection(makeIsolatedMongoUrl(integrationUrl), {
     serverSelectionTimeoutMS: 5_000,
   });
   let server;
+  let databaseConfirmedDisposable = false;
   try {
     try {
       await connection.asPromise();
@@ -74,6 +77,9 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
       throw new Error('Could not connect to the isolated MongoDB integration database.');
     }
     assertIntegrationDatabase(connection);
+    const existingCollections = await connection.db.listCollections({}, { nameOnly: true }).toArray();
+    assert.deepEqual(existingCollections, [], 'dedicated integration database must be empty before the test starts');
+    databaseConfirmedDisposable = true;
 
     const schemaForIntegration = (model) => {
       const schema = model.schema.clone();
@@ -83,22 +89,65 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     const Song = connection.model('IntegrationSong', schemaForIntegration(require('../src/models/song.model')));
     const Feedback = connection.model('IntegrationFeedback', schemaForIntegration(require('../src/models/feedback.model')));
     const Quota = connection.model('IntegrationFeedbackSessionQuota', schemaForIntegration(require('../src/models/feedback-session-quota.model')));
-    await Promise.all([Song.createIndexes(), Feedback.createIndexes(), Quota.createIndexes()]);
-    for (const model of [Song, Feedback, Quota]) {
+    const User = connection.model('IntegrationUser', schemaForIntegration(require('../src/models/user.model')));
+    const AuthSession = connection.model('IntegrationAuthSession', schemaForIntegration(require('../src/models/auth-session.model')));
+    await Promise.all([Song.createIndexes(), Feedback.createIndexes(), Quota.createIndexes(), User.createIndexes(), AuthSession.createIndexes()]);
+    for (const model of [Song, Feedback, Quota, User, AuthSession]) {
       assert.equal(model.db, connection);
       assert.equal(model.db.readyState, 1);
     }
+    const userIndexes = await User.collection.listIndexes().toArray();
+    assert.equal(userIndexes.find((index) => index.key.email === 1)?.unique, true);
+    const authSessionIndexes = await AuthSession.collection.listIndexes().toArray();
+    assert.equal(authSessionIndexes.find((index) => index.key.tokenHash === 1)?.unique, true);
+    assert.equal(authSessionIndexes.find((index) => index.key.expiresAt === 1)?.expireAfterSeconds, 0);
 
     let providerFileName;
-    const adminId = new mongoose.Types.ObjectId();
-    const admin = { _id: adminId, id: String(adminId), name: 'Integration Admin', email: 'integration-admin@example.test', role: 'admin', status: 'active' };
     const authConfig = {
       accessTokenSecret: crypto.randomBytes(32).toString('base64url'),
       accessTokenTtlSeconds: 600,
       refreshTtlDays: 30,
       cookie: { refreshName: 'moddy_refresh', csrfName: 'moddy_csrf', path: '/auth', csrfPath: '/', sameSite: 'lax', secure: false },
     };
-    const adminToken = createAccessToken({ userId: admin._id, familyId: crypto.randomUUID(), role: 'admin' }, authConfig);
+    const adminPassword = 'Integration_Admin_2026!';
+    const admin = await User.create({
+      name: 'Integration Admin',
+      email: `integration-admin-${crypto.randomUUID()}@example.test`,
+      passwordHash: await hashPassword(adminPassword),
+      role: 'admin',
+    });
+    const adminId = admin._id;
+    const adminFamilyId = crypto.randomUUID();
+    await AuthSession.create({
+      userId: adminId,
+      familyId: adminFamilyId,
+      tokenHash: hashOpaqueToken(crypto.randomBytes(48).toString('base64url')),
+      status: 'active',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    const adminToken = createAccessToken({ userId: adminId, familyId: adminFamilyId, role: 'admin' }, authConfig);
+    let failNextSessionInsert = false;
+    const sessionModelForService = new Proxy(AuthSession, {
+      get(target, property) {
+        if (property === 'create') {
+          return (...args) => {
+            if (failNextSessionInsert) {
+              failNextSessionInsert = false;
+              throw new Error('Injected integration session insert failure.');
+            }
+            return target.create(...args);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const authService = createAuthService({
+      userModel: User,
+      sessionModel: sessionModelForService,
+      configProvider: () => authConfig,
+      mongo: connection,
+    });
     const app = createApp({
       songModel: Song,
       feedbackModel: Feedback,
@@ -110,13 +159,16 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
         });
       },
       isDatabaseReady: () => connection.readyState === 1,
-      rateLimitConfig: { windowMs: 60_000, upload: 100, feedback: 100, recommendation: 100, catalog: 100, trustedProxyHops: 0 },
+      rateLimitConfig: { windowMs: 60_000, upload: 100, feedback: 100, recommendation: 100, catalog: 100, register: 100, login: 100, refresh: 100, password: 100, profile: 100, trustedProxyHops: 0 },
       uploadFile: async (_file, fileName) => {
         providerFileName = fileName;
         return { fileId: `integration-${fileName}`, url: `https://ik.example.invalid/${fileName}` };
       },
       deleteFile: async () => {},
-      userModel: { findById: async (id) => String(id) === String(admin._id) ? admin : null },
+      userModel: User,
+      authSessionModel: AuthSession,
+      authService,
+      mongo: connection,
       authConfig,
     });
     server = app.listen(0, '127.0.0.1');
@@ -127,6 +179,147 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const ready = await fetch(`${baseUrl}/health`);
     assert.equal(ready.status, 200);
+
+    const testPassword = 'Integration_User_2026!';
+    const testEmail = `integration-user-${crypto.randomUUID()}@example.test`;
+    const registration = await fetch(`${baseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Integration User', email: testEmail, password: testPassword }),
+    });
+    assert.equal(registration.status, 200);
+    const registrationBody = await registration.json();
+    const userId = registrationBody.user.id;
+    const persistedUser = await User.findById(userId).select('+passwordHash');
+    assert.ok(persistedUser);
+    assert.match(persistedUser.passwordHash, /^\$argon2id\$/);
+    assert.notEqual(persistedUser.passwordHash, testPassword);
+    assert.equal(await AuthSession.countDocuments({ userId }), 1);
+    assert.equal(registrationBody.user.passwordHash, undefined);
+    const cookieValue = (response, name) => {
+      const cookie = response.headers.getSetCookie().find((header) => header.startsWith(`${name}=`));
+      assert.ok(cookie, `${name} cookie should be issued`);
+      return cookie.split(';')[0].slice(name.length + 1);
+    };
+    const csrfCookieHeader = (csrf) => `moddy_csrf=${csrf}`;
+    const csrfHeader = (csrf) => ({ 'x-csrf-token': csrf });
+    const login = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: 'Incorrect_Password_2026!' }),
+    });
+    assert.equal(login.status, 401);
+    assert.equal((await login.json()).error.code, 'AUTH_INVALID_CREDENTIALS');
+    const loginResponse = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: testPassword }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const loginBody = await loginResponse.json();
+    const oldRefresh = cookieValue(loginResponse, 'moddy_refresh');
+    const oldCsrf = cookieValue(loginResponse, 'moddy_csrf');
+    const oldSession = await AuthSession.findOne({ tokenHash: hashOpaqueToken(oldRefresh) }).select('+tokenHash');
+    assert.equal(oldSession.status, 'active');
+    assert.notEqual(oldSession.tokenHash, oldRefresh);
+
+    const refreshRequest = (refresh, csrf) => fetch(`${baseUrl}/auth/refresh`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', cookie: `moddy_refresh=${refresh}; ${csrfCookieHeader(csrf)}`, ...csrfHeader(csrf) },
+    });
+    const rotatedResponse = await refreshRequest(oldRefresh, oldCsrf);
+    assert.equal(rotatedResponse.status, 200);
+    const rotatedBody = await rotatedResponse.json();
+    const newRefresh = cookieValue(rotatedResponse, 'moddy_refresh');
+    assert.notEqual(newRefresh, oldRefresh);
+    assert.equal((await AuthSession.findById(oldSession._id)).status, 'rotated');
+    const rotatedSession = await AuthSession.findOne({ tokenHash: hashOpaqueToken(newRefresh) }).select('+tokenHash');
+    assert.equal(rotatedSession.status, 'active');
+    assert.notEqual(rotatedSession.tokenHash, newRefresh);
+    const reuseResponse = await refreshRequest(oldRefresh, oldCsrf);
+    assert.equal(reuseResponse.status, 401);
+    assert.equal((await AuthSession.countDocuments({ userId, familyId: oldSession.familyId, status: 'active' })), 0);
+    const revokedTokenResponse = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${rotatedBody.accessToken}` } });
+    assert.equal(revokedTokenResponse.status, 401);
+
+    const logoutLogin = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: testPassword }),
+    });
+    const logoutLoginBody = await logoutLogin.json();
+    const logoutRefresh = cookieValue(logoutLogin, 'moddy_refresh');
+    const logoutCsrf = cookieValue(logoutLogin, 'moddy_csrf');
+    const logoutResponse = await fetch(`${baseUrl}/auth/logout`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', cookie: `moddy_refresh=${logoutRefresh}; ${csrfCookieHeader(logoutCsrf)}`, ...csrfHeader(logoutCsrf) },
+    });
+    assert.equal(logoutResponse.status, 204);
+    assert.equal((await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${logoutLoginBody.accessToken}` } })).status, 401);
+
+    const allSessionsOne = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST', headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: testPassword }),
+    });
+    const allSessionsOneBody = await allSessionsOne.json();
+    const allSessionsOneCsrf = cookieValue(allSessionsOne, 'moddy_csrf');
+    const allSessionsTwo = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST', headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: testPassword }),
+    });
+    const allSessionsTwoBody = await allSessionsTwo.json();
+    const allSessionsTwoCsrf = cookieValue(allSessionsTwo, 'moddy_csrf');
+    const logoutAll = await fetch(`${baseUrl}/auth/logout-all`, {
+      method: 'POST',
+      headers: {
+        origin: 'http://localhost:5173',
+        authorization: `Bearer ${allSessionsOneBody.accessToken}`,
+        cookie: csrfCookieHeader(allSessionsOneCsrf),
+        ...csrfHeader(allSessionsOneCsrf),
+      },
+    });
+    assert.equal(logoutAll.status, 204);
+    assert.equal(await AuthSession.countDocuments({ userId, status: 'active' }), 0);
+    assert.equal((await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${allSessionsTwoBody.accessToken}` } })).status, 401);
+
+    for (const token of ['malformed', `${loginBody.accessToken}x`]) {
+      const rejected = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(rejected.status, 401);
+    }
+    const expiredToken = createAccessToken({ userId, familyId: crypto.randomUUID(), role: 'user' }, authConfig, new Date(Date.now() - 20 * 60_000));
+    assert.equal((await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${expiredToken}` } })).status, 401);
+    const duplicateRegistration = await fetch(`${baseUrl}/auth/register`, {
+      method: 'POST', headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Duplicate', email: testEmail, password: testPassword }),
+    });
+    assert.equal(duplicateRegistration.status, 409);
+
+    const beforeRollbackUsers = await User.countDocuments({ email: /rollback/ });
+    failNextSessionInsert = true;
+    const rollback = await fetch(`${baseUrl}/auth/register`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Rollback User', email: `rollback-${crypto.randomUUID()}@example.test`, password: testPassword }),
+    });
+    assert.equal(rollback.status, 500);
+    assert.equal(await User.countDocuments({ email: /rollback/ }), beforeRollbackUsers);
+
+    const concurrentLogin = await fetch(`${baseUrl}/auth/login`, {
+      method: 'POST', headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: testEmail, password: testPassword }),
+    });
+    const concurrentBody = await concurrentLogin.json();
+    const concurrentRefresh = cookieValue(concurrentLogin, 'moddy_refresh');
+    const concurrentCsrf = cookieValue(concurrentLogin, 'moddy_csrf');
+    const concurrentRotations = await Promise.all([
+      refreshRequest(concurrentRefresh, concurrentCsrf),
+      refreshRequest(concurrentRefresh, concurrentCsrf),
+    ]);
+    assert.equal(concurrentRotations.filter((response) => response.status === 200).length, 1);
+    assert.equal(concurrentRotations.filter((response) => response.status === 401).length, 1);
+    const concurrentSession = await AuthSession.findOne({ tokenHash: hashOpaqueToken(concurrentRefresh) });
+    assert.equal(await AuthSession.countDocuments({ userId, familyId: concurrentSession.familyId, status: 'active' }), 0);
+    assert.equal((await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${concurrentBody.accessToken}` } })).status, 401);
 
     const form = new FormData();
     form.set('title', 'Integration Song');
@@ -250,7 +443,9 @@ test('isolated MongoDB integration: startup, songs, catalog, recommendations, fe
     }
     // The URI and connected database are both guarded to the dedicated test DB.
     // Clean it up even when an assertion fails.
-    if (connection.readyState === 1) await dropIntegrationDatabase(connection).catch(() => {});
+    if (connection.readyState === 1 && databaseConfirmedDisposable) {
+      await dropIntegrationDatabase(connection).catch(() => {});
+    }
     if (connection.readyState !== 0) await connection.close().catch(() => {});
   }
 });

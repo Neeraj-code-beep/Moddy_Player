@@ -2,9 +2,9 @@ const express = require('express');
 const ApiError = require('../utils/api-error');
 const { createAuthenticate, requireCsrf, requireTrustedOrigin } = require('../middleware/authentication');
 
-function createAuthRouter({ authService, userModel, configProvider, allowedOrigins, rateLimiters = {} }) {
+function createAuthRouter({ authService, userModel, sessionModel, configProvider, allowedOrigins, rateLimiters = {} }) {
   const router = express.Router();
-  const authenticate = createAuthenticate({ userModel, configProvider });
+  const authenticate = createAuthenticate({ userModel, sessionModel, configProvider });
   const trustedOrigin = requireTrustedOrigin(allowedOrigins);
   const csrf = requireCsrf({ allowedOrigins, configProvider });
 

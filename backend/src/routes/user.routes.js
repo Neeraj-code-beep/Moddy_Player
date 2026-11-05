@@ -1,9 +1,9 @@
 const express = require('express');
 const { createAuthenticate } = require('../middleware/authentication');
 
-function createUserRouter({ authService, userModel, configProvider, rateLimiters = {} }) {
+function createUserRouter({ authService, userModel, sessionModel, configProvider, rateLimiters = {} }) {
   const router = express.Router();
-  const authenticate = createAuthenticate({ userModel, configProvider });
+  const authenticate = createAuthenticate({ userModel, sessionModel, configProvider });
 
   router.get('/me', authenticate, async (req, res) => {
     const user = await authService.getCurrentUser(req.auth.userId);

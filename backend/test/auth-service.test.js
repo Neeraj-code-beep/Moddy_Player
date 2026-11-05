@@ -48,6 +48,52 @@ function fixture({ rotationConflict = false } = {}) {
   return { calls, current, service, sessions };
 }
 
+test('registration writes the user and hashed refresh session inside one transaction', async () => {
+  const createdUsers = [];
+  const createdSessions = [];
+  let transactionCalls = 0;
+  let ended = 0;
+  const transaction = {
+    async withTransaction(callback) { transactionCalls += 1; return callback(); },
+    async endSession() { ended += 1; },
+  };
+  const registeredUser = { ...user, _id: new mongoose.Types.ObjectId(), id: undefined };
+  const service = createAuthService({
+    userModel: {
+      async findOne() { return null; },
+      async create(records, options) {
+        assert.ok(Array.isArray(records));
+        assert.equal(options.session, transaction);
+        createdUsers.push(...records);
+        return [{ ...registeredUser, ...records[0] }];
+      },
+    },
+    sessionModel: {
+      async create(records, options) {
+        assert.ok(Array.isArray(records));
+        assert.equal(options.session, transaction);
+        createdSessions.push(...records);
+        return records;
+      },
+    },
+    configProvider: () => config,
+    mongo: { async startSession() { return transaction; } },
+  });
+
+  const result = await service.register({ name: 'New Listener', email: 'new-listener@example.test', password: 'Moddy_User_Test_2026!' });
+
+  assert.equal(transactionCalls, 1);
+  assert.equal(ended, 1);
+  assert.equal(createdUsers.length, 1);
+  assert.equal(createdUsers[0].role, 'user');
+  assert.equal(createdSessions.length, 1);
+  assert.equal(createdSessions[0].status, 'active');
+  assert.equal(createdSessions[0].userId.toString(), registeredUser._id.toString());
+  assert.equal(createdSessions[0].tokenHash, hashOpaqueToken(result.refreshToken));
+  assert.notEqual(createdSessions[0].tokenHash, result.refreshToken);
+  assert.equal(result.user.passwordHash, undefined);
+});
+
 test('refresh atomically rotates the stored hash inside one transaction', async () => {
   const { calls, current, service, sessions } = fixture();
   const result = await service.refresh(rawRefreshToken);

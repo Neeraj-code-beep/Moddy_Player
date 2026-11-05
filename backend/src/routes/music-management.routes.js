@@ -149,6 +149,7 @@ function createMusicManagementRouter({
   enqueueAnalysis = enqueueSongAnalysis,
   runBackfill = runSongAnalysisBackfill,
   userModel,
+  authSessionModel,
   authConfigProvider,
   uploadFile: configuredUploadFile,
   deleteFile: configuredDeleteFile,
@@ -159,7 +160,7 @@ function createMusicManagementRouter({
 } = {}) {
   const router = express.Router();
   const authenticate = userModel && authConfigProvider
-    ? createAuthenticate({ userModel, configProvider: authConfigProvider })
+    ? createAuthenticate({ userModel, sessionModel: authSessionModel, configProvider: authConfigProvider })
     : (_req, _res, next) => next(new ApiError(503, 'AUTH_UNAVAILABLE', 'Authentication is unavailable.'));
   const requireAdmin = requireRole('admin');
   const uploadFile = configuredUploadFile || ((...args) => require('../service/storage.service')(...args));

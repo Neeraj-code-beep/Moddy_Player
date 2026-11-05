@@ -11,9 +11,18 @@ const regularUserId = '507f1f77bcf86cd799439012';
 const testAdmin = { _id: adminId, id: adminId, name: 'Test Admin', email: 'admin@example.test', role: 'admin', status: 'active' };
 const testRegularUser = { _id: regularUserId, id: regularUserId, name: 'Test User', email: 'user@example.test', role: 'user', status: 'active' };
 const testUserModel = { async findById(id) { return String(id) === adminId ? testAdmin : String(id) === regularUserId ? testRegularUser : null; } };
+const testAuthSessionModel = {
+  findOne(filter) {
+    const value = [adminId, regularUserId].includes(String(filter.userId)) &&
+      filter.familyId === 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6' && filter.status === 'active'
+      ? { _id: 'active-session' }
+      : null;
+    return { select() { return this; }, then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); } };
+  },
+};
 const adminToken = createAccessToken({ userId: adminId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'admin' }, testAuthConfig);
 const userToken = createAccessToken({ userId: regularUserId, familyId: 'b6c0f7cc-8c9d-4b1e-a9f2-30a6a6466ce6', role: 'user' }, testAuthConfig);
-const makeApp = (options = {}) => createApp({ userModel: testUserModel, authConfig: testAuthConfig, ...options });
+const makeApp = (options = {}) => createApp({ userModel: testUserModel, authSessionModel: testAuthSessionModel, authConfig: testAuthConfig, ...options });
 
 const validAudio = Buffer.from('RIFF0000WAVE');
 const audioFields = { title: '  Test Song  ', artist: '  Test Artist ', mood: ' happy ' };
@@ -207,11 +216,14 @@ test('readiness reports unavailable database state as not ready', async () => {
 });
 
 test('CORS allows the configured frontend and omits access for other browser origins', async () => {
-  assert.deepEqual([...getCorsOrigins('')], ['http://localhost:5173', 'http://127.0.0.1:5173']);
+  assert.deepEqual([...getCorsOrigins('', 'development')], ['http://localhost:5173', 'http://127.0.0.1:5173']);
   assert.deepEqual([...getCorsOrigins('https://player.example.com, https://admin.example.com')], [
     'https://player.example.com',
     'https://admin.example.com',
   ]);
+  assert.throws(() => getCorsOrigins('', 'production'), /required in production/);
+  assert.throws(() => getCorsOrigins('http://player.example.com', 'production'), /exact HTTPS origins/);
+  assert.throws(() => getCorsOrigins('https://player.example.com/path', 'production'), /exact HTTPS origins/);
   const corsApp = makeApp({
     corsOrigins: new Set(['http://localhost:5173']),
     isDatabaseReady: () => true,

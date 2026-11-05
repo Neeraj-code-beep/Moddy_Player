@@ -24,8 +24,11 @@ function invalidRefreshToken() {
   return new ApiError(401, 'AUTH_INVALID_SESSION', 'The session is invalid or has expired. Please sign in again.');
 }
 
-function isDuplicateKey(error) {
-  return error?.code === 11000;
+function isDuplicateEmail(error) {
+  return error?.code === 11000 && (
+    error.keyPattern?.email === 1 ||
+    Object.hasOwn(error.keyValue || {}, 'email')
+  );
 }
 
 function createAuthService({
@@ -44,18 +47,20 @@ function createAuthService({
     return createAccessToken({ userId: user._id || user.id, familyId, role: user.role }, config, now());
   }
 
-  async function createSessionCredentials(user, familyId = crypto.randomUUID()) {
+  async function createSessionCredentials(user, familyId = crypto.randomUUID(), transaction) {
     const config = configProvider();
     const refreshToken = createRefreshToken();
     const csrfToken = createCsrfToken();
     const expiresAt = new Date(now().getTime() + config.refreshTtlDays * 24 * 60 * 60 * 1000);
-    await sessionModel.create({
+    const sessionRecord = {
       userId: user._id || user.id,
       familyId,
       tokenHash: hashOpaqueToken(refreshToken),
       status: 'active',
       expiresAt,
-    });
+    };
+    if (transaction) await sessionModel.create([sessionRecord], { session: transaction });
+    else await sessionModel.create(sessionRecord);
     return {
       accessToken: issueAccessToken(user, familyId, config),
       refreshToken,
@@ -73,16 +78,23 @@ function createAuthService({
     if (await userModel.findOne({ email })) {
       throw new ApiError(409, 'AUTH_REGISTRATION_UNAVAILABLE', 'Unable to create an account with those details.');
     }
-    let user;
+    const passwordHash = await hashPassword(password);
+    const transaction = await mongo.startSession();
+    let credentials;
     try {
-      user = await userModel.create({ name, email, passwordHash: await hashPassword(password), role: 'user' });
+      await transaction.withTransaction(async () => {
+        const [user] = await userModel.create([{ name, email, passwordHash, role: 'user' }], { session: transaction });
+        credentials = await createSessionCredentials(user, undefined, transaction);
+      });
     } catch (error) {
-      if (isDuplicateKey(error)) {
+      if (isDuplicateEmail(error)) {
         throw new ApiError(409, 'AUTH_REGISTRATION_UNAVAILABLE', 'Unable to create an account with those details.');
       }
       throw error;
+    } finally {
+      await transaction.endSession();
     }
-    return createSessionCredentials(user);
+    return credentials;
   }
 
   async function login(body) {
