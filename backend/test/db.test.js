@@ -3,6 +3,13 @@ const { afterEach, mock, test } = require('node:test');
 const mongoose = require('mongoose');
 const connectToDB = require('../src/db/db');
 const feedbackSessionQuotaModel = require('../src/models/feedback-session-quota.model');
+const Feedback = require('../src/models/feedback.model');
+const User = require('../src/models/user.model');
+const AuthSession = require('../src/models/auth-session.model');
+const Song = require('../src/models/song.model');
+const Favorite = require('../src/models/favorite.model');
+const Playlist = require('../src/models/playlist.model');
+const SongAnalysisJob = require('../src/models/song-analysis-job.model');
 
 const originalMongoUrl = process.env.MONGODB_URL;
 const originalTimeout = process.env.MONGODB_CONNECT_TIMEOUT_MS;
@@ -24,17 +31,19 @@ test('database connection uses the configured timeout and resolves only after co
   process.env.MONGODB_URL = 'mongodb://localhost/moddy_test';
   process.env.MONGODB_CONNECT_TIMEOUT_MS = '2500';
   let connectOptions;
-  let indexesCreated = false;
+  const indexedModels = new Set();
   mock.method(mongoose, 'connect', async (_url, options) => {
     connectOptions = options;
     return mongoose;
   });
-  mock.method(feedbackSessionQuotaModel, 'createIndexes', async () => { indexesCreated = true; });
+  for (const model of [feedbackSessionQuotaModel, Feedback, User, AuthSession, Song, Favorite, Playlist, SongAnalysisJob]) {
+    mock.method(model, 'createIndexes', async () => { indexedModels.add(model.modelName); });
+  }
   mock.method(console, 'log', () => {});
 
   await connectToDB();
   assert.deepEqual(connectOptions, { serverSelectionTimeoutMS: 2500 });
-  assert.equal(indexesCreated, true);
+  assert.deepEqual([...indexedModels].sort(), ['AuthSession', 'Favorite', 'Feedback', 'FeedbackSessionQuota', 'Playlist', 'Song', 'SongAnalysisJob', 'User']);
 });
 
 test('database connection failures are propagated to startup', async () => {

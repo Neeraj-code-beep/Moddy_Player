@@ -7,7 +7,9 @@ import MoodDetector from './components/MoodDetector';
 import MoodSongs from './components/MoodSongs';
 import BottomPlayer from './components/player/BottomPlayer';
 import { fetchRecommendations, sendFeedback } from './api/api';
+import { useAuth } from './auth/AuthContext';
 import { getAdjacentSongIndex } from './lib/playback-navigation';
+import MusicLibrary from './components/MusicLibrary';
 
 const App = () => {
   const [recommendationResult, setRecommendationResult] = useState(null);
@@ -18,10 +20,26 @@ const App = () => {
   const [recommendationError, setRecommendationError] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [pendingFeedback, setPendingFeedback] = useState(new Set());
+  const { user, setUser, loading: authLoading, sessionExpired, clearSessionNotice } = useAuth();
   const recommendationSequenceRef = useRef(0);
   const pendingFeedbackRef = useRef(new Set());
   const activeSongIndexRef = useRef(-1);
   const currentSongRef = useRef(null);
+
+  const changeAuthUser = (account) => {
+    setUser(account);
+    if (!account) {
+      recommendationSequenceRef.current += 1;
+      setRecommendationResult(null);
+      setCurrentSong(null);
+      currentSongRef.current = null;
+      activeSongIndexRef.current = -1;
+      setIsPlaying(false);
+      setFeedbackMessage('');
+      setPendingFeedback(new Set());
+      pendingFeedbackRef.current.clear();
+    }
+  };
 
   const handleRecommend = async (request, options) => {
     const sequence = ++recommendationSequenceRef.current;
@@ -111,7 +129,8 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/30 relative">
-      <Navbar />
+      <Navbar user={user} authLoading={authLoading} onUserChange={changeAuthUser} />
+      {sessionExpired && <p role="status" className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full border border-white/15 bg-[#171715] px-4 py-2 text-sm text-amber-100">Your session ended. Sign in again to continue.<button type="button" onClick={clearSessionNotice} aria-label="Dismiss session notice" className="ml-3">×</button></p>}
       <main className={currentSong ? 'pb-40 md:pb-32' : ''}>
         <Hero />
         <MoodDetector onRecommend={handleRecommend} isLoading={isLoading} error={recommendationError} />
@@ -128,6 +147,7 @@ const App = () => {
             />
           )}
         </AnimatePresence>
+        <MusicLibrary user={user} onPlaySong={handlePlaySong} />
       </main>
       <AnimatePresence>
         {currentSong && (

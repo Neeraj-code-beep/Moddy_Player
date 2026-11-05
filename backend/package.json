@@ -1,15 +1,20 @@
 {
   "scripts": {
     "start": "node server.js",
+    "worker:music-ai": "node src/workers/music-analysis.worker.js",
+    "admin:provision": "node scripts/provision-admin.js",
     "test": "node --test"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.3.0",
+    "argon2": "^0.45.1",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "env": "^0.0.2",
     "express": "^5.2.1",
     "imagekit": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.6",
     "multer": "^2.1.1"
   }

@@ -1,4 +1,4 @@
-const SUPPORTED_MOODS = new Set(['angry', 'disgusted', 'fearful', 'happy', 'neutral', 'sad', 'surprised']);
+const SUPPORTED_MOODS = new Set(['angry', 'disgusted', 'fearful', 'happy', 'neutral', 'sad', 'surprised', 'romantic', 'energetic', 'calm', 'nostalgic', 'peaceful', 'motivational', 'melancholic']);
 const MOOD_ALIASES = new Map([
   ['anger', 'angry'],
   ['fear', 'fearful'],
@@ -8,8 +8,8 @@ const MOOD_ALIASES = new Map([
 ]);
 const INTENTIONS = new Set(['match', 'cheer_up', 'calm_down', 'surprise']);
 const ENERGIES = new Set(['low', 'medium', 'high']);
-const MOOD_VALENCE = { sad: 0, angry: 1, disgusted: 1, fearful: 1, neutral: 2, surprised: 3, happy: 4 };
-const MOOD_ENERGY = { sad: 'low', angry: 'high', disgusted: 'medium', fearful: 'medium', neutral: 'medium', surprised: 'medium', happy: 'high' };
+const MOOD_VALENCE = { sad: 0, melancholic: 0, angry: 1, disgusted: 1, fearful: 1, nostalgic: 2, neutral: 2, calm: 2, peaceful: 2, surprised: 3, romantic: 3, energetic: 3, happy: 4, motivational: 4 };
+const MOOD_ENERGY = { sad: 'low', melancholic: 'low', calm: 'low', peaceful: 'low', romantic: 'low', angry: 'high', energetic: 'high', motivational: 'high', fearful: 'medium', disgusted: 'medium', nostalgic: 'medium', neutral: 'medium', surprised: 'medium', happy: 'high' };
 const CANDIDATE_LIMIT = 500;
 const DEFAULT_RESULT_LIMIT = 12;
 const MAX_RESULT_LIMIT = 50;
@@ -60,7 +60,7 @@ function validateRecommendationRequest(body) {
 }
 
 function songId(song) {
-  return String(song?._id ?? song?.id ?? '');
+  return String(song?._id ?? song?.id ?? song?.songId ?? '');
 }
 
 function energyFor(song, mood) {
@@ -68,8 +68,36 @@ function energyFor(song, mood) {
   return ENERGIES.has(energy) ? energy : MOOD_ENERGY[mood] || null;
 }
 
-function scoreSong(song, { mood, intention }) {
-  const candidateMood = normalizeMood(song?.mood);
+function buildUserPreferenceProfile({ favorites = [], feedback = [] } = {}) {
+  const genreCounts = new Map();
+  const moodCounts = new Map();
+  const feedbackBySong = new Map();
+  const addFeature = (map, value) => {
+    const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (key) map.set(key, (map.get(key) || 0) + 1);
+  };
+  for (const song of favorites) {
+    addFeature(genreCounts, song.genre);
+    addFeature(moodCounts, normalizeMood(song.mood));
+  }
+  for (const event of feedback) {
+    const id = songId(event);
+    if (!id) continue;
+    const current = feedbackBySong.get(id) || { like: 0, completed: 0, dislike: 0, skip: 0 };
+    if (Object.hasOwn(current, event.event)) current[event.event] += 1;
+    feedbackBySong.set(id, current);
+    if (event.event === 'like' || event.event === 'completed') {
+      addFeature(genreCounts, event.genre);
+      addFeature(moodCounts, normalizeMood(event.mood));
+    }
+  }
+  return { genreCounts, moodCounts, feedbackBySong };
+}
+
+function scoreSong(song, { mood, intention }, preferences = null) {
+  const normalizedMood = normalizeMood(song?.mood);
+  const secondaryMoods = Array.isArray(song?.secondaryMoods) ? song.secondaryMoods.map(normalizeMood).filter(Boolean) : [];
+  const candidateMood = normalizedMood || secondaryMoods[0] || null;
   const energy = energyFor(song, candidateMood);
   const hasStoredEnergy = typeof song?.energy === 'string' && ENERGIES.has(song.energy.trim().toLowerCase());
   const reasons = [];
@@ -140,6 +168,10 @@ function scoreSong(song, { mood, intention }) {
   }
 
   const tags = Array.isArray(song?.tags) ? song.tags : [];
+  if (mood && secondaryMoods.includes(mood) && candidateMood !== mood) {
+    score += 45;
+    reasons.push(`includes ${mood} as a reviewed secondary mood`);
+  }
   if (intention === 'cheer_up' && tags.some((tag) => ['uplifting', 'energetic'].includes(String(tag).toLowerCase()))) {
     score += 5;
     reasons.push('has an uplifting descriptive tag');
@@ -147,6 +179,32 @@ function scoreSong(song, { mood, intention }) {
   if (intention === 'calm_down' && tags.some((tag) => ['calm', 'relaxing', 'ambient'].includes(String(tag).toLowerCase()))) {
     score += 5;
     reasons.push('has a calm descriptive tag');
+  }
+  const contexts = Array.isArray(song?.listeningContexts) ? song.listeningContexts : [];
+  const wantedContexts = intention === 'cheer_up' ? ['celebration', 'workout'] : intention === 'calm_down' ? ['relaxing', 'late_night', 'focus'] : intention === 'surprise' ? ['travelling', 'celebration'] : [];
+  if (contexts.some((context) => wantedContexts.includes(context))) {
+    score += 8;
+    reasons.push('fits the selected listening intention');
+  }
+  if (preferences) {
+    const genre = String(song?.genre || '').trim().toLowerCase();
+    if (genre && preferences.genreCounts.get(genre)) {
+      score += Math.min(18, preferences.genreCounts.get(genre) * 6);
+      reasons.push('matches genres in your favorites or positive feedback');
+    }
+    if (candidateMood && preferences.moodCounts.get(candidateMood)) {
+      score += Math.min(20, preferences.moodCounts.get(candidateMood) * 5);
+      reasons.push('matches moods in your favorites or positive feedback');
+    }
+    const events = preferences.feedbackBySong.get(songId(song));
+    if (events?.dislike) {
+      score -= Math.min(80, events.dislike * 50);
+      reasons.push('reduced because of your earlier feedback');
+    }
+    if (events?.skip) {
+      score -= Math.min(30, events.skip * 10);
+      reasons.push('reduced to avoid a recently skipped track');
+    }
   }
   if (reasons.length === 0) reasons.push('selected from available catalog metadata');
   return { score, reasons, mood: candidateMood, energy };
@@ -159,8 +217,8 @@ function compareStable(left, right) {
   return songId(left.song).localeCompare(songId(right.song));
 }
 
-function rankSongs(songs, request) {
-  const ranked = songs.map((song) => ({ song, ...scoreSong(song, request) }));
+function rankSongs(songs, request, preferences = null) {
+  const ranked = songs.map((song) => ({ song, ...scoreSong(song, request, preferences) }));
   const selected = [];
   const remaining = [...ranked];
   const artistCounts = new Map();
@@ -193,12 +251,12 @@ function rankSongs(songs, request) {
   return selected;
 }
 
-async function getRecommendations(songModel, request) {
-  const candidates = await songModel.find({})
+async function getRecommendations(songModel, request, visibilityFilter = {}, preferences = null) {
+  const candidates = await songModel.find(visibilityFilter)
     .sort({ createdAt: -1, _id: -1 })
     .limit(CANDIDATE_LIMIT)
     .lean();
-  const recommendations = rankSongs(candidates, request).slice(0, request.limit);
+  const recommendations = rankSongs(candidates, request, preferences).slice(0, request.limit);
   return recommendations;
 }
 
@@ -206,6 +264,7 @@ module.exports = {
   CANDIDATE_LIMIT,
   MAX_RESULT_LIMIT,
   getRecommendations,
+  buildUserPreferenceProfile,
   normalizeIntention,
   normalizeMood,
   rankSongs,

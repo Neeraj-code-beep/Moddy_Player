@@ -58,7 +58,6 @@ function validateSongMetadata(body) {
 
   const limits = { title: 120, artist: 120, mood: 40 };
   const metadata = {};
-
   for (const [field, maxLength] of Object.entries(limits)) {
     const value = body?.[field];
     if (typeof value !== 'string' || value.trim().length === 0) {
@@ -104,4 +103,14 @@ function validateSongMetadata(body) {
   return metadata;
 }
 
-module.exports = { validateAudioDeclaration, validateAudioFile, validateSongMetadata };
+function getGeminiAudioMimeType(file) {
+  const extension = path.extname(file.originalname || '').toLowerCase();
+  const mimeTypes = {
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+    '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/opus',
+    '.m4a': 'audio/m4a', '.mp4': 'audio/m4a', '.aac': 'audio/aac', '.webm': 'audio/webm',
+  };
+  return mimeTypes[extension] || null;
+}
+
+module.exports = { getGeminiAudioMimeType, validateAudioDeclaration, validateAudioFile, validateSongMetadata };

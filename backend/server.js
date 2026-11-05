@@ -1,6 +1,7 @@
 require('dotenv').config();
 const app = require('./src/app');
 const connectToDB = require('./src/db/db');
+const { getAuthConfig } = require('./src/config/auth');
 const configuredPort = process.env.PORT || '3000';
 
 if (!/^\d+$/.test(configuredPort) || Number(configuredPort) < 1 || Number(configuredPort) > 65535) {
@@ -8,6 +9,7 @@ if (!/^\d+$/.test(configuredPort) || Number(configuredPort) < 1 || Number(config
 }
 
 async function startServer({ app: serverApp = app } = {}) {
+  getAuthConfig();
   await connectToDB();
 
   return new Promise((resolve, reject) => {

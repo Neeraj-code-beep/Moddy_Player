@@ -10,6 +10,8 @@
 
 Moddy Player is an experimental **AI-powered mood-based music recommendation web application**.
 
+See [Music Management](docs/music-management.md) for the ownership model, private library, upload workflows, moderation, favorites, playlists, and current AI categorization boundary.
+
 The app detects a user's **facial expression through their webcam**, determines their **current mood**, and suggests songs accordingly.
 
 This project mainly focuses on **core functionality and system architecture**, combining **Computer Vision, AI concepts, and Web Development**.

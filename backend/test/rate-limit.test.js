@@ -178,6 +178,12 @@ test('rate limit environment configuration is bounded and the memory store prune
     feedback: 30,
     recommendation: 60,
     catalog: 120,
+    analysis: 10,
+    register: 5,
+    login: 10,
+    refresh: 30,
+    password: 5,
+    profile: 30,
     trustedProxyHops: 0,
   });
   assert.throws(() => getRateLimitConfig({ RATE_LIMIT_WINDOW_MS: '999' }), /between 1000 and 3600000/);

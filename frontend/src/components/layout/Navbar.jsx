@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion as Motion } from 'framer-motion';
 import { AudioLines, Menu, X } from 'lucide-react';
+import AuthPanel from '../AuthPanel';
 
 const links = [
   { label: 'Home', href: '#home' },
   { label: 'Discover', href: '#discover' },
+  { label: 'My Library', href: '#library', authenticated: true },
 ];
 
-const Navbar = () => {
+const Navbar = ({ user, authLoading, onUserChange }) => {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const menuTriggerRef = useRef(null);
 
   useEffect(() => {
@@ -66,8 +69,10 @@ const Navbar = () => {
           </a>
 
           <div className="hidden items-center gap-8 md:flex">
-            {links.map((link) => <a key={link.href} href={link.href} className="rounded py-2 text-sm text-white/65 transition hover:text-white">{link.label}</a>)}
+            {links.filter((link) => !link.authenticated || user).map((link) => <a key={link.href} href={link.href} className="rounded py-2 text-sm text-white/65 transition hover:text-white">{link.label}</a>)}
           </div>
+
+          <button type="button" disabled={authLoading} onClick={() => setAccountOpen(true)} className="hidden rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-60 md:block">{authLoading ? 'Checking…' : user ? user.name : 'Sign in'}</button>
 
           <button
             type="button"
@@ -101,15 +106,17 @@ const Navbar = () => {
               </button>
             </div>
             <nav aria-label="Mobile navigation" className="mt-12 flex flex-col items-center gap-5">
-              {links.map((link) => (
+              {links.filter((link) => !link.authenticated || user).map((link) => (
                 <a key={link.href} href={link.href} onClick={closeMenu} className="rounded-md px-4 py-3 text-2xl font-medium text-white/80 hover:text-amber-100">
                   {link.label}
                 </a>
               ))}
+              <button type="button" disabled={authLoading} onClick={() => { closeMenu(); setAccountOpen(true); }} className="rounded-full border border-white/20 px-5 py-3 text-white disabled:opacity-60">{authLoading ? 'Checking…' : user ? 'Your account' : 'Sign in'}</button>
             </nav>
           </Motion.div>
         )}
       </AnimatePresence>
+      {accountOpen && <AuthPanel user={user} onUserChange={onUserChange} onClose={() => setAccountOpen(false)} />}
     </>
   );
 };
